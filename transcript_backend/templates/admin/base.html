@@ -1,0 +1,8 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{{ site_title|default:_('USTED Admin') }}{% endblock %}
+
+{% block extrahead %}
+<link rel="icon" type="image/png" href="{% static 'AAMUSTED_nobg.png' %}" />
+{% endblock %}
