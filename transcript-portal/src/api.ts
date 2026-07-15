@@ -122,6 +122,33 @@ export async function post(path: string, body: any) {
   }
 }
 
+// Authenticated file upload (multipart/form-data)
+export async function uploadFile(path: string, formData: FormData) {
+  try {
+    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        headers.Authorization = `Bearer ${accessToken}`;
+        const retry = await fetch(`${BASE_URL}${path}`, { method: 'POST', headers, body: formData });
+        return retry.ok ? retry.json() : null;
+      }
+      logout();
+      window.location.reload();
+      return null;
+    }
+    return res.ok ? res.json() : null;
+  } catch (err) {
+    console.error("API upload error", err);
+    return null;
+  }
+}
+
 // Authenticated PATCH request
 export async function patch(path: string, body: any) {
   try {
