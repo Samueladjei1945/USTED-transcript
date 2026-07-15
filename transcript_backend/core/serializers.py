@@ -41,8 +41,8 @@ class SupportTicketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SupportTicket
-        fields = ['id', 'student', 'student_name', 'student_id', 'subject', 'message', 'status', 'admin_response', 'responded_at', 'responded_by', 'created_at', 'updated_at']
-        read_only_fields = ['student', 'responded_at', 'responded_by']
+        fields = ['id', 'student', 'student_name', 'student_id', 'subject', 'message', 'status', 'admin_response', 'responded_at', 'responded_by', 'student_read', 'admin_viewed', 'created_at', 'updated_at']
+        read_only_fields = ['student', 'responded_at', 'responded_by', 'student_read', 'admin_viewed']
 
 
 class TranscriptRequestSerializer(serializers.ModelSerializer):
@@ -51,4 +51,4 @@ class TranscriptRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TranscriptRequest
-        fields = ['id', 'student_id', 'student_name', 'purpose', 'transcript_type', 'momo_name', 'momo_number', 'telephone', 'address', 'total_amount', 'notes', 'payment_reference', 'status', 'created_at', 'reviewed_at', 'document']
+        fields = ['id', 'student_id', 'student_name', 'purpose', 'transcript_type', 'momo_name', 'momo_number', 'momo_provider', 'telephone', 'address', 'total_amount', 'notes', 'payment_reference', 'status', 'created_at', 'reviewed_at', 'document']

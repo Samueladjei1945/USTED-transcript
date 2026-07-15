@@ -57,8 +57,9 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const [detailTicket, setDetailTicket] = useState<any>(null);
   const [respondText, setRespondText] = useState("");
   const [respondStatus, setRespondStatus] = useState("");
+  const [openTicketCount, setOpenTicketCount] = useState(0);
 
-  useEffect(() => { Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents()]).then(() => setLoading(false)); }, []);
+  useEffect(() => { Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents(), fetchOpenTicketCount()]).then(() => setLoading(false)); }, []);
 
   function queryParams(params: Record<string, string | number>) {
     return Object.entries(params)
@@ -127,9 +128,23 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  async function fetchOpenTicketCount() {
+    try {
+      const data = await get(`/admin/tickets/?${queryParams({ status: "Open", admin_viewed: "false", page: 1, page_size: 1 })}`);
+      if (data) setOpenTicketCount(data.total || 0);
+    } catch {}
+  }
+
+  async function markTicketViewed(ticketId: number) {
+    try {
+      await patch(`/admin/tickets/${ticketId}/mark-viewed/`, {});
+      fetchOpenTicketCount();
+    } catch {}
+  }
+
   async function handleRefresh() {
     setRefreshing(true);
-    await Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents(), fetchTickets()]);
+    await Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents(), fetchTickets(), fetchOpenTicketCount()]);
     setRefreshing(false);
   }
 
@@ -256,10 +271,10 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       <div className="d-flex gap-2 mb-4 flex-wrap">
         {[["overview", "Overview"], ["requests", "Transcript Requests"], ["students", "Student Records"], ["complaints", "Complaints"]].map(([key, label]) => (
           <button key={key}
-            className={`btn ${tab === key ? '' : 'btn-outline-secondary'}`}
+            className={`btn ${tab === key ? '' : 'btn-outline-secondary'} position-relative`}
             style={tab === key ? { background: WINE, color: "#fff", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 600 } : { borderRadius: 8, fontSize: 13, fontWeight: 500, border: "1px solid #ddd", color: "#555" }}
             onClick={() => { setTab(key); if (key !== "overview") setDrillStudent(null); }}
-          >{label}</button>
+          >{label}{key === "complaints" && openTicketCount > 0 && <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill" style={{ background: "#A32D2D", fontSize: 10, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{openTicketCount}</span>}</button>
         ))}
       </div>
 
@@ -576,7 +591,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                     <thead><tr>{["Subject", "Student", "Status", "Submitted", "Response"].map(h => <th key={h} className="table-thead-th" style={{ background: "#f8f6f2" }}>{h}</th>)}</tr></thead>
                     <tbody>
                       {tickets.map((t: any) => (
-                        <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => { setDetailTicket(t); setRespondText(""); setRespondStatus(""); }}>
+                        <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => { setDetailTicket(t); setRespondText(""); setRespondStatus(""); markTicketViewed(t.id); }}>
                           <td className="table-tbody-td fw-semibold">{t.subject}</td>
                           <td className="table-tbody-td">{t.student_name}<br/><span className="text-muted" style={{ fontSize: 12 }}>{t.student_id}</span></td>
                           <td className="table-tbody-td"><span className="badge rounded-pill" style={{ background: t.status === "Open" ? "#FAEEDA" : t.status === "In Progress" ? "#E3EEF9" : t.status === "Resolved" ? "#EAF3DE" : "#EAEAEA", color: t.status === "Open" ? "#854F0B" : t.status === "In Progress" ? "#185FA5" : t.status === "Resolved" ? "#3B6D11" : "#666", fontWeight: 600 }}>{t.status}</span></td>

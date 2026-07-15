@@ -76,6 +76,7 @@ def submit_request(request):
             transcript_type=(request.data.get('transcript_type') or '').strip(),
             momo_name=(request.data.get('momo_name') or '').strip(),
             momo_number=(request.data.get('momo_number') or '').strip(),
+            momo_provider=(request.data.get('momo_provider') or '').strip(),
             telephone=(request.data.get('telephone') or '').strip(),
             address=(request.data.get('address') or '').strip(),
             total_amount=total_amount,
@@ -351,6 +352,10 @@ def admin_tickets(request):
     if status_filter and status_filter != 'all':
         qs = qs.filter(status=status_filter)
 
+    viewed_filter = request.GET.get('admin_viewed', '')
+    if viewed_filter in ('true', 'false'):
+        qs = qs.filter(admin_viewed=(viewed_filter == 'true'))
+
     page = int(request.GET.get('page', 1))
     page_size = int(request.GET.get('page_size', 25))
     total = qs.count()
@@ -389,6 +394,26 @@ def admin_respond_ticket(request, ticket_id):
     ticket.save()
     serializer = SupportTicketSerializer(ticket)
     return Response(serializer.data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def student_mark_tickets_read(request):
+    try:
+        student = Student.objects.get(user=request.user)
+    except Student.DoesNotExist:
+        return Response({'error': 'Student not found'}, status=404)
+    SupportTicket.objects.filter(student=student, admin_response__gt='', student_read=False).update(student_read=True)
+    return Response({'ok': True})
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_mark_ticket_viewed(request, ticket_id):
+    if not is_admin(request.user):
+        return Response({'error': 'Unauthorized'}, status=403)
+    SupportTicket.objects.filter(id=ticket_id).update(admin_viewed=True)
+    return Response({'ok': True})
 
 
 @api_view(['PATCH'])
@@ -583,6 +608,7 @@ def verify_and_create_request(request):
         transcript_type=(request.data.get('transcript_type') or '').strip(),
         momo_name=(request.data.get('momo_name') or '').strip(),
         momo_number=(request.data.get('momo_number') or '').strip(),
+        momo_provider=(request.data.get('momo_provider') or '').strip(),
         telephone=(request.data.get('telephone') or '').strip(),
         address=(request.data.get('address') or '').strip(),
         total_amount=total_amount,

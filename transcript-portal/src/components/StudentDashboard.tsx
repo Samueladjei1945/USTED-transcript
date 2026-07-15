@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { get, post } from "../api";
+import { get, post, patch } from "../api";
 import { generatePDF } from "../utils/generatePDF";
 import { WINE, GOLD, GREEN, USTED_PROGRAMMES, FALLBACK_TRANSCRIPT, FALLBACK_LETTERS } from "../constants";
 
@@ -110,7 +110,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
   const [ticketError, setTicketError] = useState("");
   const [ticketSuccess, setTicketSuccess] = useState("");
 
-  useEffect(() => { fetchData(); fetchPrices(); }, []);
+  useEffect(() => { fetchData(); fetchPrices(); fetchTickets(); }, []);
 
   async function fetchPrices() {
     try {
@@ -147,7 +147,15 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
     try {
       const data = await get('/student/tickets/');
       setTickets(data || []);
-      setUnreadCount((data || []).filter((t: any) => t.admin_response).length);
+      setUnreadCount((data || []).filter((t: any) => t.admin_response && !t.student_read).length);
+    } catch {}
+  }
+
+  async function markTicketsRead() {
+    try {
+      await patch('/student/tickets/mark-read/', {});
+      setUnreadCount(0);
+      fetchTickets();
     } catch {}
   }
 
@@ -316,6 +324,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
             transcript_type: form.transcript_type,
             momo_name: form.momo_name,
             momo_number: form.momo_number,
+            momo_provider: form.momo_provider,
             telephone: (form.country_code || "+233") + form.telephone.replace(/^0/, ""),
             address: form.address,
             total_amount: total,
@@ -362,6 +371,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
         transcript_type: form.transcript_type,
         momo_name: form.momo_name,
         momo_number: form.momo_number,
+        momo_provider: form.momo_provider,
         telephone: (form.country_code || "+233") + form.telephone.replace(/^0/, ""),
         address: form.address,
         total_amount: total,
@@ -530,7 +540,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
               }} style={{ accentColor: WINE }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: simulating ? GOLD : "#999" }}>🔬 Simulator</span>
             </label>
-            <button className="btn btn-sm position-relative" style={{ background: "none", border: "1px solid #ddd", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#555", padding: "4px 10px", cursor: "pointer" }} onClick={() => { setShowSupport(true); fetchTickets(); }}>❓ Help{unreadCount > 0 && <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill" style={{ background: "#A32D2D", fontSize: 10, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", transform: "translate(-50%, -50%) !important" }}>{unreadCount}</span>}</button>
+            <button className="btn btn-sm position-relative" style={{ background: "none", border: "1px solid #ddd", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#555", padding: "4px 10px", cursor: "pointer" }} onClick={() => { setShowSupport(true); markTicketsRead(); }}>❓ Help{unreadCount > 0 && <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill" style={{ background: "#A32D2D", fontSize: 10, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", transform: "translate(-50%, -50%) !important" }}>{unreadCount}</span>}</button>
             <span className="badge rounded-pill badge-status badge-active">{student.status}</span>
           </div>
         </div>
@@ -960,14 +970,27 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                             </div>
 
                             <div className="row g-2 mb-4">
-                              {[{ icon: "📱", label: "MTN MoMo" }, { icon: "📱", label: "Vodafone Cash" }, { icon: "📱", label: "AirtelTigo Money" }, { icon: "💳", label: "Visa / Mastercard" }].map(p => (
-                                <div key={p.label} className="col-6">
-                                  <div className="d-flex align-items-center gap-2 p-3 rounded-3" style={{ background: "#f9f6ef", border: "1px solid #e8d5b0", fontSize: 13, fontWeight: 500, color: "#444" }}>
+                              {[{ icon: "📱", value: "MTN MoMo", label: "MTN MoMo" }, { icon: "📱", value: "Vodafone Cash", label: "Vodafone Cash" }, { icon: "📱", value: "AirtelTigo Money", label: "AirtelTigo Money" }, { icon: "💳", value: "Card", label: "Visa / Mastercard" }].map(p => (
+                                <div key={p.value} className="col-6">
+                                  <div className="d-flex align-items-center gap-2 p-3 rounded-3" style={{ background: form.momo_provider === p.value ? "rgba(114,47,55,0.08)" : "#f9f6ef", border: form.momo_provider === p.value ? `2px solid ${WINE}` : "1px solid #e8d5b0", cursor: "pointer", fontSize: 13, fontWeight: 500, color: form.momo_provider === p.value ? WINE : "#444", transition: "all 0.15s" }} onClick={() => setForm({...form, momo_provider: p.value})}>
                                     <span>{p.icon}</span> {p.label}
                                   </div>
                                 </div>
                               ))}
                             </div>
+
+                            {form.momo_provider && form.momo_provider !== "Card" && (
+                              <div className="row g-2 mb-4">
+                                <div className="col-6">
+                                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: "#555" }}>MoMo Account Name</label>
+                                  <input className="form-input w-100" placeholder="e.g. John Doe" value={form.momo_name} onChange={e => setForm({...form, momo_name: e.target.value})} style={{ fontSize: 14 }} />
+                                </div>
+                                <div className="col-6">
+                                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: "#555" }}>MoMo Phone Number</label>
+                                  <input className="form-input w-100" placeholder="e.g. 024xxxxxxx" value={form.momo_number} onChange={e => setForm({...form, momo_number: e.target.value})} style={{ fontSize: 14 }} />
+                                </div>
+                              </div>
+                            )}
 
                             {formError && <div className="alert mb-0 py-3 px-4" role="alert" style={{ background: "#FCEBEB", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 8, fontWeight: 500 }}>{formError}</div>}
 

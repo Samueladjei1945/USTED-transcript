@@ -58,6 +58,7 @@ class TranscriptRequest(models.Model):
     transcript_type = models.CharField(max_length=200, blank=True)
     momo_name = models.CharField(max_length=100, blank=True)
     momo_number = models.CharField(max_length=50, blank=True)
+    momo_provider = models.CharField(max_length=50, blank=True)
     telephone = models.CharField(max_length=50, blank=True)
     address = models.TextField(blank=True)
     total_amount = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
@@ -86,6 +87,8 @@ class SupportTicket(models.Model):
     admin_response = models.TextField(blank=True)
     responded_at = models.DateTimeField(null=True, blank=True)
     responded_by = models.CharField(max_length=100, blank=True)
+    student_read = models.BooleanField(default=False)
+    admin_viewed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
