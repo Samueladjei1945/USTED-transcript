@@ -49,9 +49,11 @@ class Course(models.Model):
 class TranscriptRequest(models.Model):
     STATUS_CHOICES = [
         ('Pending Payment', 'Pending Payment'),
-        ('Pending', 'Pending'),
+        ('Pending Review', 'Pending Review'),
+        ('Under Review', 'Under Review'),
         ('Approved', 'Approved'),
         ('Rejected', 'Rejected'),
+        ('Completed', 'Completed'),
     ]
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='requests')
     purpose = models.CharField(max_length=100)
@@ -68,6 +70,8 @@ class TranscriptRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.CharField(max_length=100, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     document = models.FileField(upload_to='transcripts/', blank=True, null=True)
 
     def __str__(self):

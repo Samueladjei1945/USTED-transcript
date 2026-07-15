@@ -6,8 +6,11 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, L
 
 const statCards = [
   { key: "total_requests", label: "Total Requests", color: WINE },
-  { key: "pending", label: "Pending Approval", color: "#EF9F27" },
+  { key: "pending_payment", label: "Pending Payment", color: "#EF9F27" },
+  { key: "pending_review", label: "Pending Review", color: "#D97706" },
+  { key: "under_review", label: "Under Review", color: "#2563EB" },
   { key: "approved", label: "Approved", color: GREEN },
+  { key: "completed", label: "Completed", color: "#5B7DB1" },
   { key: "rejected", label: "Rejected", color: "#A32D2D" },
   { key: "total_students", label: "Registered Students", color: "#5B7DB1" },
   { key: "requests_today", label: "Requests Today", color: "#8B5CF6" },
@@ -38,7 +41,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
 
   // Bulk selection
   const [selectedReqs, setSelectedReqs] = useState<Set<number>>(new Set());
-  const [bulkStatus, setBulkStatus] = useState("Approved");
+  const [bulkStatus, setBulkStatus] = useState("Under Review");
 
   // Detail modal
   const [detailReq, setDetailReq] = useState<any>(null);
@@ -151,15 +154,42 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   // Fetch tickets when tab becomes "complaints" or filters change
   useEffect(() => { if (tab === "complaints") fetchTickets(); }, [tab, ticketPage, ticketSearch, ticketStatusFilter]);
 
-  async function updateStatus(reqId: number, status: string) {
-    await patch(`/admin/requests/${reqId}/status/`, { status });
+  function getRejectionReason() {
+    const reason = window.prompt("Enter rejection reason for the student:");
+    if (!reason || !reason.trim()) {
+      alert("Rejection reason is required.");
+      return null;
+    }
+    return reason.trim();
+  }
+
+  async function updateStatus(reqId: number, status: string, rejectionReason = "") {
+    const payload: Record<string, string> = { status };
+    if (status === "Rejected") payload.rejection_reason = rejectionReason;
+    const result = await patch(`/admin/requests/${reqId}/status/`, payload);
+    if (!result || result.error) {
+      alert(result?.error || "Failed to update request status.");
+      return;
+    }
     fetchRequests();
     fetchAnalytics();
   }
 
   async function handleBulkAction() {
     if (selectedReqs.size === 0) return;
-    await post('/admin/requests/bulk-status/', { ids: Array.from(selectedReqs), status: bulkStatus });
+    let rejectionReason = "";
+    if (bulkStatus === "Rejected") {
+      const reason = getRejectionReason();
+      if (!reason) return;
+      rejectionReason = reason;
+    }
+    const payload: Record<string, any> = { ids: Array.from(selectedReqs), status: bulkStatus };
+    if (rejectionReason) payload.rejection_reason = rejectionReason;
+    const result = await post('/admin/requests/bulk-status/', payload);
+    if (!result || result.error) {
+      alert(result?.error || "Bulk update failed.");
+      return;
+    }
     setSelectedReqs(new Set());
     fetchRequests();
     fetchAnalytics();
@@ -296,7 +326,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                 <div className="card-body p-3 p-md-4">
                   <h6 className="fw-bold mb-3" style={{ color: WINE }}>Status Breakdown</h6>
                   <div className="d-flex flex-column gap-2">
-                    {[["Pending Payment", "#FAC775", analytics.pending_payment], ["Pending Approval", "#EF9F27", analytics.pending], ["Approved", "#C0DD97", analytics.approved], ["Rejected", "#F7C1C1", analytics.rejected]].map(([label, color, count]) => (
+                    {[["Pending Payment", "#FAC775", analytics.pending_payment], ["Pending Review", "#F4B860", analytics.pending_review], ["Under Review", "#B7D4FF", analytics.under_review], ["Approved", "#C0DD97", analytics.approved], ["Completed", "#CFE0F5", analytics.completed], ["Rejected", "#F7C1C1", analytics.rejected]].map(([label, color, count]) => (
                       <div key={label} className="d-flex justify-content-between align-items-center p-2 rounded" style={{ background: `${color}25` }}>
                         <span className="small fw-semibold">{label}</span>
                         <span className="badge rounded-pill" style={{ background: color, color: "#333" }}>{count || 0}</span>
@@ -317,11 +347,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                         <span className="fw-semibold">{r.student_name}</span>
                         <span className="text-muted ms-1">{r.purpose?.slice(0, 30)}</span>
                       </div>
-                      <span className="badge rounded-pill" style={{
-                        background: r.status === "Approved" ? "#EAF3DE" : r.status === "Rejected" ? "#FCEBEB" : "#FAEEDA",
-                        color: r.status === "Approved" ? "#3B6D11" : r.status === "Rejected" ? "#A32D2D" : "#854F0B",
-                        fontSize: 11,
-                      }}>{r.status}</span>
+                      <span className="badge rounded-pill" style={badgeStyle(r.status)}>{r.status}</span>
                     </div>
                   ))}
                 </div>
@@ -382,7 +408,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
             <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
               <input className="form-control form-control-sm" style={{ width: 220, borderRadius: 8 }} placeholder="Search name, ID, purpose..." value={reqSearch} onChange={e => { setReqSearch(e.target.value); setReqPage(1); }} />
               <select className="form-select form-select-sm" style={{ width: "auto", borderRadius: 8 }} value={reqFilter} onChange={e => { setReqFilter(e.target.value); setReqPage(1); }}>
-                {["all", "Pending Payment", "Pending", "Approved", "Rejected"].map(f => <option key={f} value={f}>{f === "all" ? "All statuses" : f}</option>)}
+                {["all", "Pending Payment", "Pending Review", "Under Review", "Approved", "Completed", "Rejected"].map(f => <option key={f} value={f}>{f === "all" ? "All statuses" : f}</option>)}
               </select>
               <input type="date" className="form-control form-control-sm" style={{ width: "auto", borderRadius: 8 }} value={dateFrom} onChange={e => { setDateFrom(e.target.value); setReqPage(1); }} title="From date" />
               <input type="date" className="form-control form-control-sm" style={{ width: "auto", borderRadius: 8 }} value={dateTo} onChange={e => { setDateTo(e.target.value); setReqPage(1); }} title="To date" />
@@ -393,9 +419,10 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
               <div className="d-flex align-items-center gap-2 mb-3 p-2 rounded" style={{ background: `${WINE}10`, border: `1px solid ${WINE}30` }}>
                 <span className="small fw-semibold me-2">{selectedReqs.size} selected</span>
                 <select className="form-select form-select-sm" style={{ width: "auto", borderRadius: 8 }} value={bulkStatus} onChange={e => setBulkStatus(e.target.value)}>
+                  <option value="Pending Review">Mark Pending Review</option>
+                  <option value="Under Review">Start Review</option>
                   <option value="Approved">Approve</option>
                   <option value="Rejected">Reject</option>
-                  <option value="Pending">Mark Pending</option>
                 </select>
                 <button className="btn btn-sm text-white" style={{ background: WINE, borderRadius: 8, fontSize: 12 }} onClick={handleBulkAction}>Apply</button>
                 <button className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => setSelectedReqs(new Set())}>Clear</button>
@@ -423,6 +450,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                             <div className="fw-semibold" style={{ color: WINE, marginBottom: 4 }}>{r.transcript_type || r.purpose}</div>
                             {r.address && <div className="small text-muted"><strong>Dest:</strong> {r.address}</div>}
                             {r.telephone && <div className="small text-muted"><strong>Tel:</strong> {r.telephone}</div>}
+                            {r.rejection_reason && <div className="small" style={{ color: "#A32D2D" }}><strong>Reason:</strong> {r.rejection_reason}</div>}
                           </td>
                           <td className="table-tbody-td fw-bold">GH₵{r.total_amount || "0.00"}</td>
                           <td className="table-tbody-td text-muted">{r.created_at?.slice(0, 10)}</td>
@@ -431,15 +459,21 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                             {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill ms-1" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "2px 6px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪</span>}
                           </td>
                           <td className="table-tbody-td" onClick={e => e.stopPropagation()}>
-                            {r.status === "Pending" && (
+                            {r.status === "Pending Payment" && (
+                              <button className="btn btn-sm text-white" style={{ background: "#5B7DB1", borderRadius: 8, fontSize: 12 }} onClick={() => updateStatus(r.id, "Pending Review")}>Mark Paid</button>
+                            )}
+                            {r.status === "Pending Review" && (
+                              <button className="btn btn-sm text-white" style={{ background: "#2563EB", borderRadius: 8, fontSize: 12 }} onClick={() => updateStatus(r.id, "Under Review")}>Start Review</button>
+                            )}
+                            {r.status === "Under Review" && (
                               <div className="d-flex gap-2 flex-wrap">
                                 <button className="btn btn-sm text-white" style={{ background: "#3B6D11", borderRadius: 8, fontSize: 12 }} onClick={() => updateStatus(r.id, "Approved")}>Approve</button>
-                                <button className="btn btn-sm text-white" style={{ background: "#A32D2D", borderRadius: 8, fontSize: 12 }} onClick={() => updateStatus(r.id, "Rejected")}>Reject</button>
+                                <button className="btn btn-sm text-white" style={{ background: "#A32D2D", borderRadius: 8, fontSize: 12 }} onClick={() => { const reason = getRejectionReason(); if (reason) updateStatus(r.id, "Rejected", reason); }}>Reject</button>
                               </div>
                             )}
                             {r.status === "Approved" && <button className="btn btn-outline-primary btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => handleGeneratePDF(r)}>PDF</button>}
-                            {r.status === "Pending Payment" && (
-                              <button className="btn btn-sm text-white" style={{ background: "#5B7DB1", borderRadius: 8, fontSize: 12 }} onClick={() => updateStatus(r.id, "Pending")}>Mark Paid</button>
+                            {r.status === "Completed" && (
+                              <span className="badge rounded-pill" style={{ background: "#E3EEF9", color: "#1D4F91", fontSize: 11, fontWeight: 600 }}>Fulfilled</span>
                             )}
                             {r.status === "Rejected" && <span className="text-muted small">—</span>}
                           </td>
@@ -703,29 +737,32 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                     <div className="col-6"><span className="text-muted small">Telephone</span><div>{detailReq.telephone || "—"}</div></div>
                     <div className="col-6"><span className="text-muted small">Payment Ref</span><div style={{ fontSize: 12 }}>{detailReq.payment_reference || "—"}</div></div>
                     <div className="col-12"><span className="text-muted small">Delivery Address</span><div>{detailReq.address || "—"}</div></div>
+                    {detailReq.rejection_reason && <div className="col-12"><span className="text-muted small">Rejection Reason</span><div style={{ whiteSpace: "pre-wrap", color: "#A32D2D" }}>{detailReq.rejection_reason}</div></div>}
                     {detailReq.notes && <div className="col-12"><span className="text-muted small">Notes</span><div style={{ whiteSpace: "pre-wrap" }}>{detailReq.notes}</div></div>}
                     <div className="col-12"><span className="text-muted small">Document</span><div>{detailReq.document ? <a href={detailReq.document} target="_blank" rel="noopener noreferrer" style={{ color: "#3B6D11" }}>View uploaded file</a> : "Not uploaded"}</div></div>
                   </div>
                 </div>
               </div>
               <div className="modal-footer" style={{ borderTop: "1px solid #f0e8d8" }}>
-                {detailReq.status === "Pending" && (
+                {detailReq.status === "Pending Payment" && <button className="btn btn-sm text-white ms-auto" style={{ background: "#5B7DB1", borderRadius: 8 }} onClick={() => { updateStatus(detailReq.id, "Pending Review"); setDetailReq(null); }}>Mark Paid</button>}
+                {detailReq.status === "Pending Review" && <button className="btn btn-sm text-white ms-auto" style={{ background: "#2563EB", borderRadius: 8 }} onClick={() => { updateStatus(detailReq.id, "Under Review"); setDetailReq(null); }}>Start Review</button>}
+                {detailReq.status === "Under Review" && (
                   <div className="d-flex gap-2 ms-auto">
                     <button className="btn btn-sm text-white" style={{ background: "#3B6D11", borderRadius: 8 }} onClick={() => { updateStatus(detailReq.id, "Approved"); setDetailReq(null); }}>Approve</button>
-                    <button className="btn btn-sm text-white" style={{ background: "#A32D2D", borderRadius: 8 }} onClick={() => { updateStatus(detailReq.id, "Rejected"); setDetailReq(null); }}>Reject</button>
+                    <button className="btn btn-sm text-white" style={{ background: "#A32D2D", borderRadius: 8 }} onClick={() => { const reason = getRejectionReason(); if (!reason) return; updateStatus(detailReq.id, "Rejected", reason); setDetailReq(null); }}>Reject</button>
                   </div>
                 )}
                 {detailReq.status === "Approved" && (
                   <div className="d-flex gap-2 ms-auto flex-wrap align-items-center">
-                    {detailReq.document && (
-                      <a className="btn btn-sm text-white" style={{ background: "#3B6D11", borderRadius: 8 }} href={detailReq.document} target="_blank" rel="noopener noreferrer">Download Document</a>
-                    )}
                     <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: 8 }} onClick={() => { handleGeneratePDF(detailReq); setDetailReq(null); }}>PDF (auto)</button>
                     <label className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.6 : 1 }}>
-                      {uploading ? "Uploading..." : detailReq.document ? "Replace Document" : "Upload Document"}
+                      {uploading ? "Uploading..." : "Upload Document"}
                       <input id={`file-upload-${detailReq.id}`} type="file" accept=".pdf" hidden disabled={uploading} onChange={() => handleUploadDocument(detailReq.id)} />
                     </label>
                   </div>
+                )}
+                {detailReq.status === "Completed" && detailReq.document && (
+                  <a className="btn btn-sm text-white ms-auto" style={{ background: "#3B6D11", borderRadius: 8 }} href={detailReq.document} target="_blank" rel="noopener noreferrer">Download Document</a>
                 )}
                 <button className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8 }} onClick={() => setDetailReq(null)}>Close</button>
               </div>
@@ -739,13 +776,15 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
 
 const badgeColors: Record<string, { background: string; color: string; border: string }> = {
   "Pending Payment": { background: "#FFF0E0", color: "#B85C00", border: "1px solid #FFD6A8" },
-  Pending: { background: "#FAEEDA", color: "#854F0B", border: "1px solid #FAC775" },
+  "Pending Review": { background: "#FAEEDA", color: "#854F0B", border: "1px solid #FAC775" },
+  "Under Review": { background: "#E3EEF9", color: "#1D4F91", border: "1px solid #BFD8F2" },
   Approved: { background: "#EAF3DE", color: "#3B6D11", border: "1px solid #C0DD97" },
+  Completed: { background: "#E8F1FC", color: "#1D4F91", border: "1px solid #BCD5F3" },
   Rejected: { background: "#FCEBEB", color: "#A32D2D", border: "1px solid #F7C1C1" },
 };
 
 function badgeStyle(status: string): React.CSSProperties {
-  return { ...(badgeColors[status] || badgeColors.Pending), fontSize: 12, padding: "4px 12px", borderRadius: 20, fontWeight: 600, display: "inline-block", boxShadow: "0 2px 4px rgba(0,0,0,0.02)" };
+  return { ...(badgeColors[status] || badgeColors["Pending Review"]), fontSize: 12, padding: "4px 12px", borderRadius: 20, fontWeight: 600, display: "inline-block", boxShadow: "0 2px 4px rgba(0,0,0,0.02)" };
 }
 
 function gradeColor(grade: string): string {

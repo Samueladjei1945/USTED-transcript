@@ -438,8 +438,8 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
     </div>
   );
 
-  const approved = requests.filter(r => r.status === "Approved").length;
-  const pending = requests.filter(r => r.status === "Pending").length;
+  const completed = requests.filter(r => r.status === "Completed").length;
+  const pending = requests.filter(r => ["Pending Payment", "Pending Review", "Under Review"].includes(r.status)).length;
   const total_reqs = requests.length;
 
   return (
@@ -559,7 +559,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                 { label: "Year / Level", value: student.year, sub: "Current enrolment", color: WINE },
                 { label: "Cumulative GPA", value: student.gpa || "—", sub: "Academic standing", color: GREEN },
                 { label: "Total Requests", value: total_reqs, sub: "Transcript requests made", color: WINE },
-                { label: "Approved", value: approved, sub: "Ready to download", color: "#3B6D11" },
+                { label: "Completed", value: completed, sub: "Ready to download", color: "#3B6D11" },
               ].map(stat => (
                 <div key={stat.label} className="col">
                   <div className="stat-card h-100">
@@ -574,7 +574,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
             {pending > 0 && (
               <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="status" style={{ borderLeft: "4px solid #EF9F27", borderRadius: 12, background: "linear-gradient(90deg, #FDF4E6 0%, #FAEEDA 100%)", borderColor: "#FAC775", color: "#854F0B" }}>
                 <span className="d-inline-block" style={{ width: 10, height: 10, borderRadius: "50%", background: "#EF9F27", flexShrink: 0 }} />
-                <span>You have <strong>{pending}</strong> pending request{pending > 1 ? "s" : ""} awaiting review.</span>
+                <span>You have <strong>{pending}</strong> request{pending > 1 ? "s" : ""} in payment/review processing.</span>
               </div>
             )}
 
@@ -1034,23 +1034,33 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
               ) : (
                 <div>
                   {requests.map(r => (
-                    <div key={r.id} className="d-flex align-items-center justify-content-between px-4 py-4" style={{ borderBottom: "1px solid #f5f0e8" }}>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 600, color: "#1a0a0a", marginBottom: 6 }}>{r.purpose}</div>
-                        <div style={{ fontSize: 13, color: "#aaa" }}>Submitted: {r.created_at.slice(0, 10)}</div>
+                    <div key={r.id} style={{ borderBottom: "1px solid #f5f0e8" }}>
+                      <div className="d-flex align-items-center justify-content-between px-4 py-4">
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 600, color: "#1a0a0a", marginBottom: 6 }}>{r.purpose}</div>
+                          <div style={{ fontSize: 13, color: "#aaa" }}>Submitted: {r.created_at.slice(0, 10)}</div>
+                        </div>
+                        <div className="d-flex align-items-center gap-3">
+                          <span className="badge rounded-pill" style={badge(r.status)}>{r.status}</span>
+                          {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "4px 8px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪 Sim</span>}
+                          {(r.status === "Completed" || (r.status === "Approved" && r.document)) && (
+                            <>
+                              {r.document && (
+                                <a className="btn btn-green btn-sm" href={r.document} target="_blank" rel="noopener noreferrer">Download Document</a>
+                              )}
+                              <button className="btn btn-outline-secondary btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => generatePDF(student, student.semesters || [], r.id)}>PDF (auto)</button>
+                            </>
+                          )}
+                          {r.status === "Approved" && !r.document && <span className="small text-muted">Awaiting document upload</span>}
+                        </div>
                       </div>
-                      <div className="d-flex align-items-center gap-3">
-                        <span className="badge rounded-pill" style={badge(r.status)}>{r.status}</span>
-                        {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "4px 8px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪 Sim</span>}
-                        {r.status === "Approved" && (
-                          <>
-                            {r.document && (
-                              <a className="btn btn-green btn-sm" href={r.document} target="_blank" rel="noopener noreferrer">Download Document</a>
-                            )}
-                            <button className="btn btn-outline-secondary btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => generatePDF(student, student.semesters || [], r.id)}>PDF (auto)</button>
-                          </>
-                        )}
-                      </div>
+                      {r.status === "Rejected" && r.rejection_reason && (
+                        <div className="px-4 pb-3 pt-0">
+                          <div className="small" style={{ color: "#A32D2D", background: "#FCEBEB", border: "1px solid #F7C1C1", borderRadius: 8, padding: "8px 10px" }}>
+                            <strong>Rejection reason:</strong> {r.rejection_reason}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1181,8 +1191,15 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
 }
 
 function badge(status: string) {
-  const map: Record<string, { background: string; color: string; border: string }> = { Pending: { background: "#FAEEDA", color: "#854F0B", border: "0.5px solid #FAC775" }, Approved: { background: "#EAF3DE", color: "#3B6D11", border: "0.5px solid #C0DD97" }, Rejected: { background: "#FCEBEB", color: "#A32D2D", border: "0.5px solid #F7C1C1" } };
-  return { ...map[status], fontSize: 12, padding: "4px 12px", borderRadius: 20, fontWeight: 500 };
+  const map: Record<string, { background: string; color: string; border: string }> = {
+    "Pending Payment": { background: "#FFF0E0", color: "#B85C00", border: "0.5px solid #FFD6A8" },
+    "Pending Review": { background: "#FAEEDA", color: "#854F0B", border: "0.5px solid #FAC775" },
+    "Under Review": { background: "#E3EEF9", color: "#1D4F91", border: "0.5px solid #BFD8F2" },
+    Approved: { background: "#EAF3DE", color: "#3B6D11", border: "0.5px solid #C0DD97" },
+    Completed: { background: "#E8F1FC", color: "#1D4F91", border: "0.5px solid #BCD5F3" },
+    Rejected: { background: "#FCEBEB", color: "#A32D2D", border: "0.5px solid #F7C1C1" },
+  };
+  return { ...(map[status] || map["Pending Review"]), fontSize: 12, padding: "4px 12px", borderRadius: 20, fontWeight: 500 };
 }
 
 function gradeStyle(grade: string) {

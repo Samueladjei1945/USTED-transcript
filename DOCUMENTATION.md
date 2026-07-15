@@ -21,7 +21,7 @@ The **USTED Transcript Portal** is a web-based system developed for the **Univer
 | **Profile Management** | Update index number, level; CGPA lookup |
 | **5-Step Request Wizard** | Service selection → Academic details → Delivery → Confirmation → Payment |
 | **Paystack Payment** | Secure payment with automatic verification |
-| **Request Tracking** | Real-time status: Pending Payment → Pending → Approved/Rejected |
+| **Request Tracking** | Real-time status: Pending Payment → Pending Review → Under Review → Approved/Rejected → Completed |
 | **PDF Transcript Generation** | Client-side PDF with branding, academic record, and verification ID |
 | **Admin Dashboard** | Analytics, search, pagination, bulk actions, date filters, student drill-down |
 | **CSV Export** | One-click export of requests and student records |
@@ -109,7 +109,7 @@ flowchart TD
     P --> Q[Step 5: Paystack Payment]
     Q --> R{Payment Successful?}
     R -->|No| Q
-    R -->|Yes| S[Request Submitted - Pending]
+    R -->|Yes| S[Request Submitted - Pending Review]
     S --> L
     
     H --> T{Choose Action}
@@ -117,11 +117,13 @@ flowchart TD
     T -->|Manage Requests| V[Search, Filter, Bulk Actions]
     T -->|View Students| W[Search, Drill-down]
     
-    V --> X[Approve / Reject]
-    X --> Y[Email Notification to Student]
-    Y --> Z{Approved?}
-    Z -->|Yes| AA[Student Downloads PDF]
-    Z -->|No| AB[Student Sees Rejection Reason]
+    V --> X[Start Review]
+    X --> Y[Approve / Reject]
+    Y --> Z[Email Notification to Student]
+    Z --> AC{Approved?}
+    AC -->|Yes| AD[Admin Uploads Final PDF]
+    AD --> AA[Request Marked Completed]
+    AC -->|No| AB[Student Sees Rejection Reason]
     
     AA --> L
 ```

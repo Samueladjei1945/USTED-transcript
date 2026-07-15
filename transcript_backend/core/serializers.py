@@ -51,4 +51,4 @@ class TranscriptRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TranscriptRequest
-        fields = ['id', 'student_id', 'student_name', 'purpose', 'transcript_type', 'momo_name', 'momo_number', 'momo_provider', 'telephone', 'address', 'total_amount', 'notes', 'payment_reference', 'status', 'created_at', 'reviewed_at', 'document']
+        fields = ['id', 'student_id', 'student_name', 'purpose', 'transcript_type', 'momo_name', 'momo_number', 'momo_provider', 'telephone', 'address', 'total_amount', 'notes', 'payment_reference', 'status', 'created_at', 'reviewed_at', 'reviewed_by', 'rejection_reason', 'completed_at', 'document']

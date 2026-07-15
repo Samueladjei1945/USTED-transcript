@@ -15,9 +15,24 @@ from django.contrib.auth.hashers import make_password
 from .models import Student, Admin, TranscriptRequest, ServicePrice, PasswordResetCode, SupportTicket
 from .serializers import StudentSerializer, TranscriptRequestSerializer, StudentListSerializer, SupportTicketSerializer
 
+REQUEST_STATUS_TRANSITIONS = {
+    'Pending Payment': ['Pending Review'],
+    'Pending Review': ['Under Review'],
+    'Under Review': ['Approved', 'Rejected'],
+    'Approved': [],
+    'Rejected': [],
+    'Completed': [],
+}
+
 
 def is_admin(user):
     return Admin.objects.filter(user=user).exists()
+
+
+def can_transition_request(current_status, new_status):
+    if current_status == new_status:
+        return True
+    return new_status in REQUEST_STATUS_TRANSITIONS.get(current_status, [])
 
 
 # Auth check - returns role of logged in user
@@ -80,7 +95,7 @@ def submit_request(request):
             telephone=(request.data.get('telephone') or '').strip(),
             address=(request.data.get('address') or '').strip(),
             total_amount=total_amount,
-            status='Pending'
+            status='Pending Payment'
         )
         serializer = TranscriptRequestSerializer(req, context={'request': request})
         
@@ -229,12 +244,18 @@ def get_admin_analytics(request):
         count = all_requests.filter(created_at__date__gte=m_start, created_at__date__lte=m_end).count()
         monthly.insert(0, {"month": m_start.strftime("%b %Y"), "count": count})
 
+    pending_review_count = all_requests.filter(status='Pending Review').count()
+    under_review_count = all_requests.filter(status='Under Review').count()
+
     return Response({
         'total_requests': all_requests.count(),
         'pending_payment': all_requests.filter(status='Pending Payment').count(),
-        'pending': all_requests.filter(status='Pending').count(),
+        'pending_review': pending_review_count,
+        'under_review': under_review_count,
+        'pending': pending_review_count + under_review_count,
         'approved': all_requests.filter(status='Approved').count(),
         'rejected': all_requests.filter(status='Rejected').count(),
+        'completed': all_requests.filter(status='Completed').count(),
         'total_students': Student.objects.count(),
         'requests_today': all_requests.filter(created_at__date=today).count(),
         'recent_requests': TranscriptRequestSerializer(
@@ -284,7 +305,7 @@ def upload_document(request, req_id):
         return Response({'error': 'Request not found'}, status=404)
 
     if req.status != 'Approved':
-        return Response({'error': 'Can only upload documents for approved requests.'}, status=400)
+        return Response({'error': 'Can only upload documents for approved requests awaiting completion.'}, status=400)
 
     file = request.FILES.get('document')
     if not file:
@@ -297,6 +318,8 @@ def upload_document(request, req_id):
         return Response({'error': 'File size must be under 10MB.'}, status=400)
 
     req.document = file
+    req.status = 'Completed'
+    req.completed_at = timezone.now()
     req.save()
     serializer = TranscriptRequestSerializer(req, context={'request': request})
     return Response(serializer.data)
@@ -423,19 +446,39 @@ def update_request_status(request, req_id):
         return Response({'error': 'Unauthorized'}, status=403)
     try:
         req = TranscriptRequest.objects.get(id=req_id)
-        new_status = request.data.get('status')
+        new_status = (request.data.get('status') or '').strip()
+        rejection_reason = (request.data.get('rejection_reason') or '').strip()
         valid_statuses = [c[0] for c in TranscriptRequest.STATUS_CHOICES]
         if new_status not in valid_statuses:
             return Response({'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'}, status=400)
+        if not can_transition_request(req.status, new_status):
+            return Response({'error': f'Invalid transition from {req.status} to {new_status}.'}, status=400)
+        if new_status == 'Rejected' and not rejection_reason:
+            return Response({'error': 'rejection_reason is required when rejecting a request.'}, status=400)
+        if new_status == 'Completed':
+            return Response({'error': 'Completed status is set automatically after document upload.'}, status=400)
+
         req.status = new_status
         req.reviewed_at = timezone.now()
         req.reviewed_by = request.user.username
+        if new_status == 'Rejected':
+            req.rejection_reason = rejection_reason
+            req.completed_at = None
+        elif new_status in ('Pending Payment', 'Pending Review', 'Under Review'):
+            req.rejection_reason = ''
+            req.completed_at = None
+        elif new_status == 'Approved':
+            req.rejection_reason = ''
+            req.completed_at = None
         req.save()
         serializer = TranscriptRequestSerializer(req, context={'request': request})
         
         # Send status update email
         subject = f"Transcript Request {req.status}"
-        message = f"Dear {req.student.name},\n\nYour request for '{req.purpose}' has been {req.status} by {req.reviewed_by}.\n\nThank you,\nAAMUSTED Academic Affairs"
+        message = f"Dear {req.student.name},\n\nYour request for '{req.purpose}' is now {req.status} (updated by {req.reviewed_by})."
+        if req.status == 'Rejected':
+            message += f"\nReason: {req.rejection_reason}"
+        message += "\n\nThank you,\nAAMUSTED Academic Affairs"
         send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [req.student.email], fail_silently=True)
         
         return Response(serializer.data)
@@ -448,20 +491,47 @@ def bulk_update_request_status(request):
         return Response({'error': 'Unauthorized'}, status=403)
     ids = request.data.get('ids', [])
     new_status = request.data.get('status', '').strip()
+    rejection_reason = (request.data.get('rejection_reason') or '').strip()
     valid_statuses = [c[0] for c in TranscriptRequest.STATUS_CHOICES]
     if not ids or not new_status:
         return Response({'error': 'ids and status are required.'}, status=400)
     if new_status not in valid_statuses:
         return Response({'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'}, status=400)
-    updated = TranscriptRequest.objects.filter(id__in=ids).update(
-        status=new_status,
-        reviewed_at=timezone.now(),
-        reviewed_by=request.user.username,
-    )
-    # Send individual emails
-    for req in TranscriptRequest.objects.filter(id__in=ids).select_related('student'):
+    if new_status == 'Rejected' and not rejection_reason:
+        return Response({'error': 'rejection_reason is required when rejecting requests.'}, status=400)
+    if new_status == 'Completed':
+        return Response({'error': 'Completed status is set automatically after document upload.'}, status=400)
+
+    requests_qs = TranscriptRequest.objects.filter(id__in=ids).select_related('student')
+    found_ids = {r.id for r in requests_qs}
+    missing_ids = [req_id for req_id in ids if req_id not in found_ids]
+    if missing_ids:
+        return Response({'error': f'Requests not found: {missing_ids}'}, status=404)
+
+    invalid_ids = [r.id for r in requests_qs if not can_transition_request(r.status, new_status)]
+    if invalid_ids:
+        return Response({'error': f'Invalid transition to {new_status} for request ids: {invalid_ids}'}, status=400)
+
+    now = timezone.now()
+    updated = 0
+    for req in requests_qs:
+        req.status = new_status
+        req.reviewed_at = now
+        req.reviewed_by = request.user.username
+        if new_status == 'Rejected':
+            req.rejection_reason = rejection_reason
+            req.completed_at = None
+        else:
+            req.rejection_reason = ''
+            req.completed_at = None
+        req.save(update_fields=['status', 'reviewed_at', 'reviewed_by', 'rejection_reason', 'completed_at'])
+        updated += 1
+
         subject = f"Transcript Request {req.status}"
-        message = f"Dear {req.student.name},\n\nYour request for '{req.purpose}' has been {req.status} by {req.reviewed_by}.\n\nThank you,\nAAMUSTED Academic Affairs"
+        message = f"Dear {req.student.name},\n\nYour request for '{req.purpose}' is now {req.status} (updated by {req.reviewed_by})."
+        if req.status == 'Rejected':
+            message += f"\nReason: {req.rejection_reason}"
+        message += "\n\nThank you,\nAAMUSTED Academic Affairs"
         send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [req.student.email], fail_silently=True)
     return Response({'updated': updated})
 
@@ -613,7 +683,7 @@ def verify_and_create_request(request):
         address=(request.data.get('address') or '').strip(),
         total_amount=total_amount,
         payment_reference=reference,
-        status='Pending'
+        status='Pending Review'
     )
     serializer = TranscriptRequestSerializer(req, context={'request': request})
 
