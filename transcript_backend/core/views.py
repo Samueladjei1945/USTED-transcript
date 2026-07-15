@@ -613,13 +613,7 @@ def verify_and_create_request(request):
     serializer = TranscriptRequestSerializer(req, context={'request': request})
 
     subject = 'Transcript Request Received'
-    message = f"Dear {student.name},
-
-We have received your request for: {req.purpose}.
-Payment received: GH₵{req.total_amount}.
-
-Thank you,
-AAMUSTED Academic Affairs"
+    message = f"Dear {student.name},\n\nWe have received your request for: {req.purpose}.\nPayment received: GH₵{req.total_amount}.\n\nThank you,\nAAMUSTED Academic Affairs"
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [student.email], fail_silently=True)
 
     return Response(serializer.data, status=201)
