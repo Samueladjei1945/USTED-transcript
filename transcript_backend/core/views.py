@@ -1,5 +1,5 @@
 import json, uuid, csv, requests as http_requests
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import timedelta, date
 from django.utils import timezone
 from django.db import models
@@ -551,30 +551,51 @@ def verify_and_create_request(request):
     if not reference:
         return Response({'error': 'Payment reference is required'}, status=400)
 
-    # Simulation mode: accept SIM- references without Paystack verification
-    if not reference.startswith('SIM-'):
-        headers = {'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}'}
-        try:
-            resp = http_requests.get(f'https://api.paystack.co/transaction/verify/{reference}', headers=headers)
-            data = resp.json()
-        except Exception as e:
-            return Response({'error': f'Payment verification failed: {str(e)}'}, status=500)
-
-        if not data.get('status') or data['data']['status'] != 'success':
-            return Response({'error': 'Payment not successful'}, status=400)
-
     try:
         student = Student.objects.get(user=request.user)
     except Student.DoesNotExist:
         return Response({'error': 'Student not found'}, status=404)
 
+    if TranscriptRequest.objects.filter(payment_reference=reference).exists():
+        return Response({'error': 'Payment reference has already been used.'}, status=400)
+
     purpose = (request.data.get('purpose') or '').strip()
     if not purpose:
         return Response({'error': 'Purpose is required.'}, status=400)
+
     try:
         total_amount = Decimal(request.data.get('total_amount', 0) or 0)
-    except Exception:
+    except (InvalidOperation, TypeError):
         return Response({'error': 'Invalid total amount.'}, status=400)
+    if total_amount <= 0:
+        return Response({'error': 'Total amount must be greater than zero.'}, status=400)
+
+    # Simulation mode: accept SIM- references without Paystack verification
+    if not reference.startswith('SIM-'):
+        headers = {'Authorization': 'Bearer ' + settings.PAYSTACK_SECRET_KEY}
+        try:
+            resp = http_requests.get(
+                f'https://api.paystack.co/transaction/verify/{reference}',
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (http_requests.RequestException, ValueError):
+            return Response({'error': 'Payment verification failed. Please try again.'}, status=502)
+
+        payload = data.get('data') or {}
+        if not data.get('status') or payload.get('status') != 'success':
+            return Response({'error': 'Payment not successful'}, status=400)
+
+        verified_email = (payload.get('customer') or {}).get('email', '').strip().lower()
+        if verified_email != student.email.strip().lower():
+            return Response({'error': 'Payment does not belong to the authenticated student.'}, status=400)
+
+        verified_amount = payload.get('amount')
+        expected_amount = int(total_amount * 100)
+        if verified_amount != expected_amount:
+            return Response({'error': 'Payment amount does not match request total.'}, status=400)
 
     req = TranscriptRequest.objects.create(
         student=student,
@@ -592,7 +613,13 @@ def verify_and_create_request(request):
     serializer = TranscriptRequestSerializer(req, context={'request': request})
 
     subject = 'Transcript Request Received'
-    message = f"Dear {student.name},\n\nWe have received your request for: {req.purpose}.\nPayment received: GH₵{req.total_amount}.\n\nThank you,\nAAMUSTED Academic Affairs"
+    message = f"Dear {student.name},
+
+We have received your request for: {req.purpose}.
+Payment received: GH₵{req.total_amount}.
+
+Thank you,
+AAMUSTED Academic Affairs"
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [student.email], fail_silently=True)
 
     return Response(serializer.data, status=201)
