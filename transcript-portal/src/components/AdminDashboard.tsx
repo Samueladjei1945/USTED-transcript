@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { get, patch, post } from "../api";
+import { get, patch, post, uploadFile } from "../api";
 import { generatePDF } from "../utils/generatePDF";
 import { WINE, GREEN } from "../constants";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from "recharts";
@@ -42,11 +42,23 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
 
   // Detail modal
   const [detailReq, setDetailReq] = useState<any>(null);
+  const [uploading, setUploading] = useState(false);
 
   // Student drill-down
   const [drillStudent, setDrillStudent] = useState<any>(null);
 
-  useEffect(() => { fetchAnalytics(); fetchRequests(); fetchStudents(); }, []);
+  // Tickets / Complaints
+  const [tickets, setTickets] = useState<any[]>([]);
+  const [ticketSearch, setTicketSearch] = useState("");
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketTotal, setTicketTotal] = useState(0);
+  const [ticketPageSize] = useState(25);
+  const [detailTicket, setDetailTicket] = useState<any>(null);
+  const [respondText, setRespondText] = useState("");
+  const [respondStatus, setRespondStatus] = useState("");
+
+  useEffect(() => { Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents()]).then(() => setLoading(false)); }, []);
 
   function queryParams(params: Record<string, string | number>) {
     return Object.entries(params)
@@ -89,19 +101,40 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
     } catch {}
   }
 
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
-    await Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents()]);
-    setLoading(false);
-  }, [reqPage, reqFilter, reqSearch, dateFrom, dateTo, stuPage, stuSearch]);
+  async function fetchTickets() {
+    try {
+      const params: Record<string, any> = { page: ticketPage, page_size: ticketPageSize };
+      if (ticketSearch) params.search = ticketSearch;
+      if (ticketStatusFilter && ticketStatusFilter !== "all") params.status = ticketStatusFilter;
+      const data = await get(`/admin/tickets/?${queryParams(params)}`);
+      if (data) {
+        setTickets(data.results || []);
+        setTicketTotal(data.total || 0);
+      }
+    } catch {}
+  }
 
-  useEffect(() => { fetchAll(); }, [reqPage, reqFilter, reqSearch, dateFrom, dateTo, stuPage, stuSearch]);
+  async function respondToTicket(ticketId: number) {
+    const payload: Record<string, string> = {};
+    if (respondText) payload.admin_response = respondText;
+    if (respondStatus) payload.status = respondStatus;
+    const result = await patch(`/admin/tickets/${ticketId}/respond/`, payload);
+    if (result) {
+      fetchTickets();
+      setDetailTicket(result);
+      setRespondText("");
+      setRespondStatus("");
+    }
+  }
 
   async function handleRefresh() {
     setRefreshing(true);
-    await Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents()]);
+    await Promise.all([fetchAnalytics(), fetchRequests(), fetchStudents(), fetchTickets()]);
     setRefreshing(false);
   }
+
+  // Fetch tickets when tab becomes "complaints" or filters change
+  useEffect(() => { if (tab === "complaints") fetchTickets(); }, [tab, ticketPage, ticketSearch, ticketStatusFilter]);
 
   async function updateStatus(reqId: number, status: string) {
     await patch(`/admin/requests/${reqId}/status/`, { status });
@@ -154,6 +187,26 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
     if (student) generatePDF(student, student.semesters || [], req.id);
   }
 
+  async function handleUploadDocument(reqId: number) {
+    const fileInput = document.getElementById(`file-upload-${reqId}`) as HTMLInputElement;
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    if (!file.name.toLowerCase().endsWith('.pdf')) { alert('Only PDF files are allowed.'); return; }
+    if (file.size > 10 * 1024 * 1024) { alert('File size must be under 10MB.'); return; }
+    setUploading(true);
+    const fd = new FormData();
+    fd.append('document', file);
+    const result = await uploadFile(`/admin/requests/${reqId}/upload-document/`, fd);
+    setUploading(false);
+    if (result) {
+      setDetailReq(result);
+      fetchRequests();
+    } else {
+      alert('Upload failed. Ensure the request is approved and try again.');
+    }
+    fileInput.value = '';
+  }
+
   function openDetail(req: any) {
     setDetailReq(req);
   }
@@ -201,7 +254,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       </div>
 
       <div className="d-flex gap-2 mb-4 flex-wrap">
-        {[["overview", "Overview"], ["requests", "Transcript Requests"], ["students", "Student Records"]].map(([key, label]) => (
+        {[["overview", "Overview"], ["requests", "Transcript Requests"], ["students", "Student Records"], ["complaints", "Complaints"]].map(([key, label]) => (
           <button key={key}
             className={`btn ${tab === key ? '' : 'btn-outline-secondary'}`}
             style={tab === key ? { background: WINE, color: "#fff", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 600 } : { borderRadius: 8, fontSize: 13, fontWeight: 500, border: "1px solid #ddd", color: "#555" }}
@@ -358,7 +411,10 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                           </td>
                           <td className="table-tbody-td fw-bold">GH₵{r.total_amount || "0.00"}</td>
                           <td className="table-tbody-td text-muted">{r.created_at?.slice(0, 10)}</td>
-                          <td className="table-tbody-td"><span className="badge-status" style={badgeStyle(r.status)}>{r.status}</span></td>
+                          <td className="table-tbody-td">
+                            <span className="badge-status" style={badgeStyle(r.status)}>{r.status}</span>
+                            {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill ms-1" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "2px 6px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪</span>}
+                          </td>
                           <td className="table-tbody-td" onClick={e => e.stopPropagation()}>
                             {r.status === "Pending" && (
                               <div className="d-flex gap-2 flex-wrap">
@@ -459,6 +515,7 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                         <div className="text-muted" style={{ fontSize: 12 }}>{r.created_at?.slice(0, 10)} · GH₵{r.total_amount}</div>
                       </div>
                       <span className="badge-status" style={badgeStyle(r.status)}>{r.status}</span>
+                      {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill ms-1" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "2px 6px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪</span>}
                     </div>
                   ))}
                 </div>
@@ -494,6 +551,120 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
         </div>
       )}
 
+      {/* ── COMPLAINTS ── */}
+      {tab === "complaints" && (
+        <div className="card shadow-sm" style={{ borderRadius: 16, border: "1px solid rgba(224,208,176,0.6)" }}>
+          <div className="card-body p-3 p-md-4">
+            <h6 className="fw-bold mb-3" style={{ color: WINE }}>Student Complaints / Tickets</h6>
+
+            <div className="d-flex mb-3 gap-2 flex-wrap">
+              <input className="form-control form-control-sm" style={{ width: 260, borderRadius: 8 }} placeholder="Search subject, student name/ID..." value={ticketSearch} onChange={e => { setTicketSearch(e.target.value); setTicketPage(1); }} />
+              <select className="form-select form-select-sm" style={{ width: 160, borderRadius: 8 }} value={ticketStatusFilter} onChange={e => { setTicketStatusFilter(e.target.value); setTicketPage(1); }}>
+                <option value="all">All Status</option>
+                <option value="Open">Open</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Resolved">Resolved</option>
+                <option value="Closed">Closed</option>
+              </select>
+            </div>
+
+            {tickets.length === 0 && <p className="text-muted small">No tickets found.</p>}
+            {tickets.length > 0 && (
+              <>
+                <div className="table-responsive-wrap">
+                  <table className="table align-middle mb-0" style={{ fontSize: 14 }}>
+                    <thead><tr>{["Subject", "Student", "Status", "Submitted", "Response"].map(h => <th key={h} className="table-thead-th" style={{ background: "#f8f6f2" }}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {tickets.map((t: any) => (
+                        <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => { setDetailTicket(t); setRespondText(""); setRespondStatus(""); }}>
+                          <td className="table-tbody-td fw-semibold">{t.subject}</td>
+                          <td className="table-tbody-td">{t.student_name}<br/><span className="text-muted" style={{ fontSize: 12 }}>{t.student_id}</span></td>
+                          <td className="table-tbody-td"><span className="badge rounded-pill" style={{ background: t.status === "Open" ? "#FAEEDA" : t.status === "In Progress" ? "#E3EEF9" : t.status === "Resolved" ? "#EAF3DE" : "#EAEAEA", color: t.status === "Open" ? "#854F0B" : t.status === "In Progress" ? "#185FA5" : t.status === "Resolved" ? "#3B6D11" : "#666", fontWeight: 600 }}>{t.status}</span></td>
+                          <td className="table-tbody-td text-muted" style={{ fontSize: 13 }}>{t.created_at?.slice(0, 10)}</td>
+                          <td className="table-tbody-td" style={{ fontSize: 13 }}>{t.admin_response ? `${t.admin_response.slice(0, 40)}${t.admin_response.length > 40 ? "…" : ""}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination page={ticketPage} total={ticketTotal} pageSize={ticketPageSize} setPage={setTicketPage} />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TICKET DETAIL MODAL ── */}
+      {detailTicket && (
+        <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => setDetailTicket(null)}>
+          <div className="modal-dialog modal-dialog-centered" onClick={e => e.stopPropagation()}>
+            <div className="modal-content" style={{ borderRadius: 16, border: "none", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+              <div className="modal-header" style={{ borderBottom: "1px solid #f0e8d8" }}>
+                <h6 className="modal-title fw-bold" style={{ color: WINE }}>Ticket Details</h6>
+                <button className="btn-close" onClick={() => setDetailTicket(null)} />
+              </div>
+              <div className="modal-body">
+                <div className="d-flex flex-column gap-3">
+                  <div className="row g-2">
+                    <div className="col-12">
+                      <span className="text-muted small">Subject</span>
+                      <div className="fw-semibold" style={{ fontSize: 16 }}>{detailTicket.subject}</div>
+                    </div>
+                    <div className="col-6">
+                      <span className="text-muted small">Student</span>
+                      <div className="fw-semibold">{detailTicket.student_name}</div>
+                    </div>
+                    <div className="col-6">
+                      <span className="text-muted small">Student ID</span>
+                      <div>{detailTicket.student_id}</div>
+                    </div>
+                    <div className="col-6">
+                      <span className="text-muted small">Status</span>
+                      <div><span className="badge rounded-pill" style={{ background: detailTicket.status === "Open" ? "#FAEEDA" : detailTicket.status === "In Progress" ? "#E3EEF9" : detailTicket.status === "Resolved" ? "#EAF3DE" : "#EAEAEA", color: detailTicket.status === "Open" ? "#854F0B" : detailTicket.status === "In Progress" ? "#185FA5" : detailTicket.status === "Resolved" ? "#3B6D11" : "#666", fontWeight: 600 }}>{detailTicket.status}</span></div>
+                    </div>
+                    <div className="col-6">
+                      <span className="text-muted small">Submitted</span>
+                      <div>{detailTicket.created_at?.slice(0, 10)}</div>
+                    </div>
+                    <div className="col-12">
+                      <span className="text-muted small">Message</span>
+                      <div style={{ background: "#faf8f4", padding: "12px 14px", borderRadius: 8, fontSize: 14, whiteSpace: "pre-wrap", border: "1px solid #e8d5b0" }}>{detailTicket.message}</div>
+                    </div>
+                    {detailTicket.admin_response && (
+                      <div className="col-12">
+                        <span className="text-muted small">Admin Response</span>
+                        <div style={{ background: "rgba(45,80,22,0.06)", padding: "12px 14px", borderRadius: 8, fontSize: 14, borderLeft: "3px solid #3B6D11" }}>
+                          {detailTicket.admin_response}
+                          <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>{detailTicket.responded_by} &middot; {detailTicket.responded_at ? new Date(detailTicket.responded_at).toLocaleDateString() : ""}</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <hr style={{ borderColor: "#e8d5b0" }} />
+                  <h6 className="fw-bold" style={{ color: WINE, fontSize: 14 }}>Respond</h6>
+                  <div className="d-flex flex-column gap-2">
+                    <select className="form-select form-select-sm" style={{ width: 200, borderRadius: 8 }} value={respondStatus} onChange={e => setRespondStatus(e.target.value)}>
+                      <option value="">Keep current status</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="Resolved">Resolved</option>
+                      <option value="Closed">Closed</option>
+                    </select>
+                    <textarea className="form-control" rows={3} placeholder="Write your response..." value={respondText} onChange={e => setRespondText(e.target.value)} style={{ borderRadius: 8, fontSize: 14, resize: "vertical" }} />
+                    <div>
+                      <button className="btn btn-sm text-white" style={{ background: WINE, borderRadius: 8 }} onClick={() => respondToTicket(detailTicket.id)} disabled={!respondText && !respondStatus}>Send Response</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer" style={{ borderTop: "1px solid #f0e8d8" }}>
+                <button className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8 }} onClick={() => setDetailTicket(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── DETAIL MODAL ── */}
       {detailReq && (
         <div className="modal d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => setDetailReq(null)}>
@@ -511,13 +682,14 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                     <div className="col-6"><span className="text-muted small">Transcript Type</span><div>{detailReq.transcript_type || "—"}</div></div>
                     <div className="col-6"><span className="text-muted small">Purpose</span><div>{detailReq.purpose}</div></div>
                     <div className="col-6"><span className="text-muted small">Amount</span><div className="fw-bold">GH₵{detailReq.total_amount || "0.00"}</div></div>
-                    <div className="col-6"><span className="text-muted small">Status</span><div><span className="badge-status" style={badgeStyle(detailReq.status)}>{detailReq.status}</span></div></div>
+                    <div className="col-6"><span className="text-muted small">Status</span><div><span className="badge-status" style={badgeStyle(detailReq.status)}>{detailReq.status}</span>{(detailReq.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill ms-1" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "2px 6px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪 Sim</span>}</div></div>
                     <div className="col-6"><span className="text-muted small">Submitted</span><div>{detailReq.created_at?.slice(0, 10)}</div></div>
                     <div className="col-6"><span className="text-muted small">Reviewed</span><div>{detailReq.reviewed_at ? detailReq.reviewed_at.slice(0, 10) : "—"}</div></div>
                     <div className="col-6"><span className="text-muted small">Telephone</span><div>{detailReq.telephone || "—"}</div></div>
                     <div className="col-6"><span className="text-muted small">Payment Ref</span><div style={{ fontSize: 12 }}>{detailReq.payment_reference || "—"}</div></div>
                     <div className="col-12"><span className="text-muted small">Delivery Address</span><div>{detailReq.address || "—"}</div></div>
                     {detailReq.notes && <div className="col-12"><span className="text-muted small">Notes</span><div style={{ whiteSpace: "pre-wrap" }}>{detailReq.notes}</div></div>}
+                    <div className="col-12"><span className="text-muted small">Document</span><div>{detailReq.document ? <a href={detailReq.document} target="_blank" rel="noopener noreferrer" style={{ color: "#3B6D11" }}>View uploaded file</a> : "Not uploaded"}</div></div>
                   </div>
                 </div>
               </div>
@@ -529,7 +701,16 @@ export default function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                   </div>
                 )}
                 {detailReq.status === "Approved" && (
-                  <button className="btn btn-sm btn-outline-primary ms-auto" style={{ borderRadius: 8 }} onClick={() => { handleGeneratePDF(detailReq); setDetailReq(null); }}>Download PDF</button>
+                  <div className="d-flex gap-2 ms-auto flex-wrap align-items-center">
+                    {detailReq.document && (
+                      <a className="btn btn-sm text-white" style={{ background: "#3B6D11", borderRadius: 8 }} href={detailReq.document} target="_blank" rel="noopener noreferrer">Download Document</a>
+                    )}
+                    <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: 8 }} onClick={() => { handleGeneratePDF(detailReq); setDetailReq(null); }}>PDF (auto)</button>
+                    <label className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.6 : 1 }}>
+                      {uploading ? "Uploading..." : detailReq.document ? "Replace Document" : "Upload Document"}
+                      <input id={`file-upload-${detailReq.id}`} type="file" accept=".pdf" hidden disabled={uploading} onChange={() => handleUploadDocument(detailReq.id)} />
+                    </label>
+                  </div>
                 )}
                 <button className="btn btn-sm btn-outline-secondary" style={{ borderRadius: 8 }} onClick={() => setDetailReq(null)}>Close</button>
               </div>

@@ -61,6 +61,22 @@ export default function App() {
   }
 
   if (!role) return <Login onLogin={handleLogin} />;
-  if (role === "admin") return <AdminDashboard onLogout={handleLogout} />;
+  if (role === "admin") {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") === "admin") {
+      return <AdminDashboard onLogout={handleLogout} />;
+    }
+    window.open(window.location.origin + window.location.pathname + "?mode=admin", "_blank");
+    return (
+      <div className="auth-page">
+        <div className="auth-card" style={{ textAlign: "center", padding: "3rem 2rem" }}>
+          <img src="/AAMUSTED_nobg.png" alt="USTED Logo" style={{ width: 80, height: 80, objectFit: "contain", filter: "drop-shadow(0 4px 16px rgba(184,150,46,0.6))" }} />
+          <h3 style={{ color: "#722F37", fontSize: 18, fontWeight: 700, marginTop: 16 }}>Admin Dashboard</h3>
+          <p style={{ color: "#555", fontSize: 14, marginTop: 12 }}>Admin dashboard has been opened in a new tab.</p>
+          <button className="btn btn-wine mt-3" onClick={handleLogout}>Logout &amp; Switch Account</button>
+        </div>
+      </div>
+    );
+  }
   if (role === "student") return <StudentDashboard onLogout={handleLogout} />;
 }

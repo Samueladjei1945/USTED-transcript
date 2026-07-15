@@ -12,8 +12,8 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
-from .models import Student, Admin, TranscriptRequest, ServicePrice, PasswordResetCode
-from .serializers import StudentSerializer, TranscriptRequestSerializer, StudentListSerializer
+from .models import Student, Admin, TranscriptRequest, ServicePrice, PasswordResetCode, SupportTicket
+from .serializers import StudentSerializer, TranscriptRequestSerializer, StudentListSerializer, SupportTicketSerializer
 
 
 def is_admin(user):
@@ -51,7 +51,7 @@ def get_student_requests(request):
     try:
         student = Student.objects.get(user=request.user)
         requests = TranscriptRequest.objects.filter(student=student).order_by('-created_at')
-        serializer = TranscriptRequestSerializer(requests, many=True)
+        serializer = TranscriptRequestSerializer(requests, many=True, context={'request': request})
         return Response(serializer.data)
     except Student.DoesNotExist:
         return Response({'error': 'Student not found'}, status=404)
@@ -81,7 +81,7 @@ def submit_request(request):
             total_amount=total_amount,
             status='Pending'
         )
-        serializer = TranscriptRequestSerializer(req)
+        serializer = TranscriptRequestSerializer(req, context={'request': request})
         
         # Send confirmation email
         subject = 'Transcript Request Received'
@@ -131,7 +131,7 @@ def get_all_requests(request):
     start = (page - 1) * page_size
     end = start + page_size
     qs_page = qs[start:end]
-    serializer = TranscriptRequestSerializer(qs_page, many=True)
+    serializer = TranscriptRequestSerializer(qs_page, many=True, context={'request': request})
     return Response({
         'results': serializer.data,
         'total': total,
@@ -181,7 +181,7 @@ def get_student_detail(request, student_id):
         student = Student.objects.get(id=student_id)
         profile_serializer = StudentSerializer(student)
         requests_qs = TranscriptRequest.objects.filter(student=student).order_by('-created_at')
-        req_serializer = TranscriptRequestSerializer(requests_qs, many=True)
+        req_serializer = TranscriptRequestSerializer(requests_qs, many=True, context={'request': request})
         return Response({
             'profile': profile_serializer.data,
             'requests': req_serializer.data,
@@ -237,7 +237,7 @@ def get_admin_analytics(request):
         'total_students': Student.objects.count(),
         'requests_today': all_requests.filter(created_at__date=today).count(),
         'recent_requests': TranscriptRequestSerializer(
-            all_requests.order_by('-created_at')[:5], many=True
+            all_requests.order_by('-created_at')[:5], many=True, context={'request': request}
         ).data,
         'weekly_trend': weekly,
         'monthly_trend': monthly,
@@ -272,6 +272,125 @@ def export_students_csv(request):
     return response
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_document(request, req_id):
+    if not is_admin(request.user):
+        return Response({'error': 'Unauthorized'}, status=403)
+    try:
+        req = TranscriptRequest.objects.get(id=req_id)
+    except TranscriptRequest.DoesNotExist:
+        return Response({'error': 'Request not found'}, status=404)
+
+    if req.status != 'Approved':
+        return Response({'error': 'Can only upload documents for approved requests.'}, status=400)
+
+    file = request.FILES.get('document')
+    if not file:
+        return Response({'error': 'No file provided.'}, status=400)
+
+    if not file.name.lower().endswith('.pdf'):
+        return Response({'error': 'Only PDF files are allowed.'}, status=400)
+
+    if file.size > 10 * 1024 * 1024:
+        return Response({'error': 'File size must be under 10MB.'}, status=400)
+
+    req.document = file
+    req.save()
+    serializer = TranscriptRequestSerializer(req, context={'request': request})
+    return Response(serializer.data)
+
+
+# ── Student Ticket Views ──
+
+@api_view(['POST', 'GET'])
+@permission_classes([IsAuthenticated])
+def student_tickets(request):
+    try:
+        student = Student.objects.get(user=request.user)
+    except Student.DoesNotExist:
+        return Response({'error': 'Student not found'}, status=404)
+
+    if request.method == 'GET':
+        tickets = SupportTicket.objects.filter(student=student).order_by('-created_at')
+        serializer = SupportTicketSerializer(tickets, many=True)
+        return Response(serializer.data)
+
+    # POST — create ticket
+    subject = (request.data.get('subject') or '').strip()
+    message = (request.data.get('message') or '').strip()
+    if not subject or not message:
+        return Response({'error': 'Subject and message are required.'}, status=400)
+    ticket = SupportTicket.objects.create(
+        student=student,
+        subject=subject,
+        message=message,
+    )
+    serializer = SupportTicketSerializer(ticket)
+    return Response(serializer.data, status=201)
+
+
+# ── Admin Ticket Views ──
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def admin_tickets(request):
+    if not is_admin(request.user):
+        return Response({'error': 'Unauthorized'}, status=403)
+    qs = SupportTicket.objects.all().select_related('student').order_by('-created_at')
+
+    search = request.GET.get('search', '').strip()
+    if search:
+        qs = qs.filter(
+            models.Q(subject__icontains=search) |
+            models.Q(student__name__icontains=search) |
+            models.Q(student__student_id__icontains=search)
+        )
+
+    status_filter = request.GET.get('status', '')
+    if status_filter and status_filter != 'all':
+        qs = qs.filter(status=status_filter)
+
+    page = int(request.GET.get('page', 1))
+    page_size = int(request.GET.get('page_size', 25))
+    total = qs.count()
+    start = (page - 1) * page_size
+    end = start + page_size
+    serializer = SupportTicketSerializer(qs[start:end], many=True)
+    return Response({
+        'results': serializer.data,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+    })
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_respond_ticket(request, ticket_id):
+    if not is_admin(request.user):
+        return Response({'error': 'Unauthorized'}, status=403)
+    try:
+        ticket = SupportTicket.objects.get(id=ticket_id)
+    except SupportTicket.DoesNotExist:
+        return Response({'error': 'Ticket not found'}, status=404)
+
+    status_val = request.data.get('status', '').strip()
+    response_text = (request.data.get('admin_response') or '').strip()
+
+    if status_val and status_val not in [c[0] for c in SupportTicket.STATUS_CHOICES]:
+        return Response({'error': 'Invalid status.'}, status=400)
+    if status_val:
+        ticket.status = status_val
+    if response_text:
+        ticket.admin_response = response_text
+        ticket.responded_at = timezone.now()
+        ticket.responded_by = request.user.username
+    ticket.save()
+    serializer = SupportTicketSerializer(ticket)
+    return Response(serializer.data)
+
+
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def update_request_status(request, req_id):
@@ -287,7 +406,7 @@ def update_request_status(request, req_id):
         req.reviewed_at = timezone.now()
         req.reviewed_by = request.user.username
         req.save()
-        serializer = TranscriptRequestSerializer(req)
+        serializer = TranscriptRequestSerializer(req, context={'request': request})
         
         # Send status update email
         subject = f"Transcript Request {req.status}"
@@ -432,15 +551,17 @@ def verify_and_create_request(request):
     if not reference:
         return Response({'error': 'Payment reference is required'}, status=400)
 
-    headers = {'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}'}
-    try:
-        resp = http_requests.get(f'https://api.paystack.co/transaction/verify/{reference}', headers=headers)
-        data = resp.json()
-    except Exception as e:
-        return Response({'error': f'Payment verification failed: {str(e)}'}, status=500)
+    # Simulation mode: accept SIM- references without Paystack verification
+    if not reference.startswith('SIM-'):
+        headers = {'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}'}
+        try:
+            resp = http_requests.get(f'https://api.paystack.co/transaction/verify/{reference}', headers=headers)
+            data = resp.json()
+        except Exception as e:
+            return Response({'error': f'Payment verification failed: {str(e)}'}, status=500)
 
-    if not data.get('status') or data['data']['status'] != 'success':
-        return Response({'error': 'Payment not successful'}, status=400)
+        if not data.get('status') or data['data']['status'] != 'success':
+            return Response({'error': 'Payment not successful'}, status=400)
 
     try:
         student = Student.objects.get(user=request.user)
@@ -468,7 +589,7 @@ def verify_and_create_request(request):
         payment_reference=reference,
         status='Pending'
     )
-    serializer = TranscriptRequestSerializer(req)
+    serializer = TranscriptRequestSerializer(req, context={'request': request})
 
     subject = 'Transcript Request Received'
     message = f"Dear {student.name},\n\nWe have received your request for: {req.purpose}.\nPayment received: GH₵{req.total_amount}.\n\nThank you,\nAAMUSTED Academic Affairs"

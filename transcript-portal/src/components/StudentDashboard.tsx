@@ -9,14 +9,45 @@ interface FormState {
   first_name: string; middle_name: string; surname: string;
   dob: string; index_number: string; level: string; programme: string;
   year_entry: string; year_completion: string; passport_number: string;
-  address: string; telephone: string; delivery_method: string; pickup_location: string; delivery_email: string;
+  address: string; gps_address: string; courier_zone: string; telephone: string; delivery_method: string; pickup_location: string; delivery_email: string;
   country_code: string; momo_provider: string; momo_number: string; momo_name: string;
 }
 
-const requestSteps = ["Service & Request Type", "Academic Details", "Delivery Details", "Payment"];
+const SIMULATOR_FORM_DATA: Partial<FormState> = {
+  transcript_type: "Standard Transcript (Academic Record)",
+  extra_copy: "No",
+  letters: ["Introductory letter (Visa)"],
+  first_name: "John",
+  middle_name: "Kofi",
+  surname: "Sample",
+  dob: "2000-01-15",
+  level: "Winneba",
+  programme: "B.Ed. Basic Education",
+  year_entry: "2021",
+  year_completion: "2025",
+  passport_number: "GHA1234567",
+  address: "P.O. Box 123, Kumasi",
+  gps_address: "AK-039-5028",
+  courier_zone: "kumasi",
+  telephone: "240000000",
+  delivery_method: "courier",
+  pickup_location: "",
+  delivery_email: "",
+  momo_number: "0240000000",
+  momo_name: "John Sample",
+  country_code: "+233",
+  momo_provider: "MTN MoMo",
+};
+
+const requestSteps = ["Service & Request Type", "Academic Details", "Delivery Details", "Confirmation", "Payment"];
+const COURIER_ZONES = [
+  { key: "kumasi", label: "Within Kumasi", price: 30 },
+  { key: "ashanti", label: "Outside Kumasi (Ashanti Region)", price: 50 },
+  { key: "outside", label: "Outside Ashanti Region", price: 80 },
+];
 
 export default function StudentDashboard({ onLogout }: { onLogout: () => void }) {
-  const [tab, setTab] = useState(() => localStorage.getItem("ust_tab") || "overview");
+  const [tab, setTab] = useState(() => { const t = localStorage.getItem("ust_tab"); return t === "request" || t === "history" || t === "overview" ? t : "overview"; });
   const [student, setStudent] = useState<any>(null);
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +62,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
     first_name: "", middle_name: "", surname: "",
     dob: "", index_number: "", level: "", programme: "",
     year_entry: "", year_completion: "", passport_number: "",
-    address: "", telephone: "", delivery_method: "", pickup_location: "", delivery_email: "",
+    address: "", gps_address: "", courier_zone: "", telephone: "", delivery_method: "", pickup_location: "", delivery_email: "",
     momo_number: "", momo_name: "",
     ...(saved.form || {}),
   });
@@ -56,7 +87,6 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
       middle_name: parts.length > 2 ? parts.slice(1, -1).join(" ") : "",
       surname: parts.length > 1 ? parts[parts.length - 1] : "",
       index_number: student.student_id || prev.index_number,
-      level: student.year || prev.level,
     }));
   }, [student?.id]);
 
@@ -66,10 +96,19 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
   });
   const [profileSubmitting, setProfileSubmitting] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [cgpaData, setCgpaData] = useState<any>(null);
   const [cgpaLoading, setCgpaLoading] = useState(false);
   const [transcriptOptions, setTranscriptOptions] = useState(FALLBACK_TRANSCRIPT);
   const [letterOptions, setLetterOptions] = useState(FALLBACK_LETTERS);
+  const [simulating, setSimulating] = useState(false);
+  const [showSupport, setShowSupport] = useState(false);
+  const [tickets, setTickets] = useState<any[]>([]);
+  const [ticketSubject, setTicketSubject] = useState("");
+  const [ticketMessage, setTicketMessage] = useState("");
+  const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [ticketError, setTicketError] = useState("");
+  const [ticketSuccess, setTicketSuccess] = useState("");
 
   useEffect(() => { fetchData(); fetchPrices(); }, []);
 
@@ -102,10 +141,46 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
     }
   }
 
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  async function fetchTickets() {
+    try {
+      const data = await get('/student/tickets/');
+      setTickets(data || []);
+      setUnreadCount((data || []).filter((t: any) => t.admin_response).length);
+    } catch {}
+  }
+
+  async function handleSubmitTicket(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ticketSubject.trim() || !ticketMessage.trim()) {
+      setTicketError("Please fill in both subject and message.");
+      return;
+    }
+    setTicketSubmitting(true);
+    setTicketError("");
+    try {
+      const result = await post('/student/tickets/', { subject: ticketSubject, message: ticketMessage });
+      if (result) {
+        setTicketSubject("");
+        setTicketMessage("");
+        setTicketSuccess("Your complaint has been submitted successfully!");
+        setTimeout(() => setTicketSuccess(""), 4000);
+        fetchTickets();
+      } else {
+        setTicketError("Failed to submit ticket. Please try again.");
+      }
+    } catch {
+      setTicketError("Network error.");
+    }
+    setTicketSubmitting(false);
+  }
+
   const transcriptPrice = transcriptOptions.find(o => o.label === form.transcript_type)?.price || 0;
   const extraCopyPrice = form.extra_copy === "Yes" ? (transcriptOptions.find(o => o.label === "Additional Copy")?.price || 12) : 0;
   const lettersPrice = form.letters.reduce((sum: number, l: string) => sum + (letterOptions.find(o => o.label === l)?.price || 0), 0);
-  const total = transcriptPrice + extraCopyPrice + lettersPrice;
+  const courierPrice = form.delivery_method === "courier" ? (COURIER_ZONES.find(z => z.key === form.courier_zone)?.price || 0) : 0;
+  const total = transcriptPrice + extraCopyPrice + lettersPrice + courierPrice;
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     let { name, value } = e.target;
@@ -135,6 +210,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
       if (form.middle_name && !/^[a-zA-Z\s]+$/.test(form.middle_name.trim())) errs.middle_name = "Middle name should only contain letters.";
       if (!form.dob) errs.dob = "Date of birth is required.";
       if (!form.programme) errs.programme = "Select or enter your programme.";
+      if (!form.level) errs.level = "Select your campus.";
       if (form.year_entry && !/^\d{4}$/.test(form.year_entry)) errs.year_entry = "Enter a valid 4-digit year (e.g. 2021).";
       if (form.year_completion && !/^\d{4}$/.test(form.year_completion)) errs.year_completion = "Enter a valid 4-digit year (e.g. 2025).";
     }
@@ -143,6 +219,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
       if (form.delivery_method === "pickup" && !form.pickup_location) errs.pickup_location = "Select a pickup location.";
       if (form.delivery_method === "email" && (!form.delivery_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.delivery_email))) errs.delivery_email = "Enter a valid email address.";
       if ((form.delivery_method === "postal" || form.delivery_method === "courier") && !form.address) errs.address = "Enter your delivery address.";
+      if (form.delivery_method === "courier" && !form.courier_zone) errs.courier_zone = "Select a delivery zone.";
       if (!form.telephone) errs.telephone = "Telephone number is required.";
       else {
         const cc = form.country_code || "+233";
@@ -161,8 +238,8 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
       setFormError("Please select at least one transcript type or letter.");
       return;
     }
-    if (step === 2 && (!form.first_name || !form.surname || !student.student_id || !student.year || !form.programme)) {
-      setFormError("Please fill in all required fields. Ensure your Profile Index Number and Level are completed.");
+    if (step === 2 && (!form.first_name || !form.surname || !student.student_id || !form.level || !form.programme)) {
+      setFormError("Please fill in all required fields. Ensure your Profile Index Number and Campus are selected.");
       return;
     }
     if (!validateStep()) return;
@@ -254,7 +331,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
           setTimeout(() => {
             setFormSuccess(false);
             setStep(1);
-            setForm({ transcript_type: "", extra_copy: "No", letters: [], first_name: "", middle_name: "", surname: "", dob: "", index_number: "", level: "", programme: "", year_entry: "", year_completion: "", passport_number: "", address: "", telephone: "", delivery_method: "", pickup_location: "", delivery_email: "", country_code: "+233", momo_number: "", momo_name: "", momo_provider: "MTN MoMo" });
+            setForm({ transcript_type: "", extra_copy: "No", letters: [], first_name: "", middle_name: "", surname: "", dob: "", index_number: "", level: "", programme: "", year_entry: "", year_completion: "", passport_number: "", address: "", gps_address: "", courier_zone: "", telephone: "", delivery_method: "", pickup_location: "", delivery_email: "", country_code: "+233", momo_number: "", momo_name: "", momo_provider: "MTN MoMo" });
             fetchData();
             setTab("history");
           }, 3000);
@@ -263,6 +340,49 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
       handler.openIframe();
     } catch (err: any) {
       setFormError("Payment failed: " + (err.message || "Unknown error"));
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSimulatePayment() {
+    setFormError("");
+    setSubmitting(true);
+    try {
+      const ref = `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const purpose = [form.transcript_type, ...form.letters].filter(Boolean).join(", ");
+      const deliveryDetail = form.delivery_method === "pickup" ? `Pickup: ${form.pickup_location}` : form.delivery_method === "email" ? `Email: ${form.delivery_email}` : form.delivery_method === "postal" || form.delivery_method === "courier" ? `Address: ${form.address}` : "";
+      const cc = form.country_code || "+233";
+      const fullTel = cc + form.telephone.replace(/^0/, "");
+      const notes = `[SIMULATION] Name: ${form.first_name} ${form.middle_name} ${form.surname} | Index: ${form.index_number} | Level: ${form.level} | Programme: ${form.programme} | Entry: ${form.year_entry} | Completion: ${form.year_completion} | DOB: ${form.dob} | Passport: ${form.passport_number || "N/A"} | ${deliveryDetail} | Tel: ${fullTel} | Extra Copy: ${form.extra_copy} | Total: GH₵${total}`;
+
+      const result = await post('/student/requests/verify-and-create/', {
+        reference: ref,
+        purpose,
+        notes,
+        transcript_type: form.transcript_type,
+        momo_name: form.momo_name,
+        momo_number: form.momo_number,
+        telephone: (form.country_code || "+233") + form.telephone.replace(/^0/, ""),
+        address: form.address,
+        total_amount: total,
+      });
+      if (!result) {
+        setFormError("Simulation failed. Could not create request.");
+        setSubmitting(false);
+        return;
+      }
+      setFormSuccess(true);
+      setSubmitting(false);
+      localStorage.removeItem("ust_req");
+      setTimeout(() => {
+        setFormSuccess(false);
+        setStep(1);
+        setForm({ transcript_type: "", extra_copy: "No", letters: [], first_name: "", middle_name: "", surname: "", dob: "", index_number: "", level: "", programme: "", year_entry: "", year_completion: "", passport_number: "", address: "", gps_address: "", courier_zone: "", telephone: "", delivery_method: "", pickup_location: "", delivery_email: "", country_code: "+233", momo_number: "", momo_name: "", momo_provider: "MTN MoMo" });
+        fetchData();
+        setTab("history");
+      }, 3000);
+    } catch (err: any) {
+      setFormError("Simulation failed: " + (err.message || "Unknown error"));
       setSubmitting(false);
     }
   }
@@ -334,7 +454,6 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
         <nav style={s.nav}>
           {[
             { key: "overview", label: "Overview", icon: "▦" },
-            { key: "profile", label: "My Profile", icon: "👤" },
             { key: "request", label: "Request Transcript", icon: "✎" },
             { key: "history", label: "My Requests", icon: "☰" },
           ].map(item => (
@@ -343,7 +462,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
               style={{ ...s.navBtn, ...(tab === item.key ? s.navBtnActive : {}) }}
               onClick={() => {
                 if (item.key === "request" && !student.student_id) {
-                  setTab("profile");
+                  setShowProfileModal(true);
                   setProfileMessage("Please complete your profile (Index Number) before requesting a transcript.");
                   return;
                 }
@@ -361,7 +480,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
 
         {/* Student info at bottom */}
         <div style={s.sidebarFooter}>
-          <div style={s.sidebarProfileCard}>
+          <div style={s.sidebarProfileCard} onClick={() => setShowProfileModal(true)} className="profile-trigger">
             <div style={s.sidebarProfileTop}>
               <div style={s.studentAvatar}>
                 {student.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
@@ -389,13 +508,38 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
             <button className="hamburger-btn" onClick={() => setSidebarOpen(true)}>☰</button>
             <div>
               <div className="page-title">
-                {tab === "overview" ? "Overview" : tab === "profile" ? "My Profile" : tab === "request" ? "Request Transcript" : "My Requests"}
+                {tab === "request" ? "Request Transcript" : tab === "history" ? "My Requests" : "Overview"}
               </div>
               <div className="d-none d-sm-block page-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
             </div>
           </div>
-          <span className="badge rounded-pill badge-status badge-active">{student.status}</span>
+          <div className="d-flex align-items-center gap-3">
+            <label className="d-flex align-items-center gap-2" style={{ cursor: "pointer", userSelect: "none" }}>
+              <input type="checkbox" checked={simulating} onChange={() => {
+                const next = !simulating;
+                setSimulating(next);
+                if (next) {
+                  setForm(prev => ({
+                    ...prev,
+                    ...SIMULATOR_FORM_DATA,
+                    index_number: student?.student_id || prev.index_number,
+                  }));
+                  setStep(1);
+                  setTab("request");
+                }
+              }} style={{ accentColor: WINE }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: simulating ? GOLD : "#999" }}>🔬 Simulator</span>
+            </label>
+            <button className="btn btn-sm position-relative" style={{ background: "none", border: "1px solid #ddd", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#555", padding: "4px 10px", cursor: "pointer" }} onClick={() => { setShowSupport(true); fetchTickets(); }}>❓ Help{unreadCount > 0 && <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill" style={{ background: "#A32D2D", fontSize: 10, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", transform: "translate(-50%, -50%) !important" }}>{unreadCount}</span>}</button>
+            <span className="badge rounded-pill badge-status badge-active">{student.status}</span>
+          </div>
         </div>
+
+        {simulating && (
+          <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="status" style={{ background: "linear-gradient(90deg, #FEF7E0 0%, #FDF0C8 100%)", border: "1px solid #FAC775", borderRadius: 12, color: "#854F0B", fontSize: 14, fontWeight: 600 }}>
+            <span>🔬 Simulator Mode — test data is pre-filled. Payment will be simulated.</span>
+          </div>
+        )}
 
         {/* ── OVERVIEW ── */}
         {tab === "overview" && (
@@ -459,77 +603,17 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
           </div>
         )}
 
-        {/* ── PROFILE TAB ── */}
-        {tab === "profile" && (
-          <div>
-            <div className="section-card">
-              <div className="section-card-header"><span className="section-card-title">Profile Details</span></div>
-              <div className="p-4">
-                <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="note" style={{ background: "linear-gradient(135deg, rgba(114,47,55,0.06) 0%, rgba(184,150,46,0.04) 100%)", border: "1px solid rgba(184,150,46,0.25)", borderRadius: 12, color: WINE, fontSize: 14 }}>Please update your academic credentials. Your Index Number is required to process requests.</div>
-                
-                {profileMessage && (
-                  <div className={"alert d-flex align-items-center py-3 px-4 mb-4 " + (profileMessage.includes("success") ? "text-green" : "text-danger")} role="alert" style={{ background: profileMessage.includes("success") ? "rgba(45,80,22,0.08)" : "#FCEBEB", border: profileMessage.includes("success") ? "1px solid rgba(99,153,34,0.3)" : "1px solid #F7C1C1", borderRadius: 8, fontWeight: 500 }}>{profileMessage}</div>
-                )}
-                
-                {/* CGPA Lookup */}
-                <div className="d-flex align-items-center gap-3 mb-4" style={{ background: "linear-gradient(135deg, rgba(45,80,22,0.06) 0%, rgba(45,80,22,0.02) 100%)", border: "1px solid rgba(45,80,22,0.2)", borderRadius: 12, padding: "1.25rem 1.5rem", display: cgpaData ? "flex" : "none", boxShadow: "0 4px 16px rgba(45,80,22,0.06)" }}>
-                  <span style={{ fontSize: 28 }}>🎓</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a", marginBottom: 2 }}>{cgpaData?.name}</div>
-                    <div style={{ fontSize: 13, color: "#888" }}>{cgpaData?.year} &middot; {cgpaData?.status}</div>
-                  </div>
-                  <div style={{ textAlign: "center", padding: "8px 20px", background: "linear-gradient(135deg, #2D5016 0%, #1a3a0e 100%)", borderRadius: 10, boxShadow: "0 4px 12px rgba(45,80,22,0.2)" }}>
-                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>CGPA</div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", fontFamily: "var(--font-heading)" }}>{cgpaData?.gpa}</div>
-                  </div>
-                </div>
-
-                <form onSubmit={handleProfileUpdate}>
-                  <div className="row g-3">
-                    <div className="col-md-6">
-                      <label className="form-label">Index Number / Student ID</label>
-                      <div className="input-group">
-                        <input className="form-input flex-grow-1" value={profileForm.student_id} onChange={e => { setCgpaData(null); setProfileForm({...profileForm, student_id: e.target.value.replace(/[^0-9a-zA-Z]/g, "")}); }} placeholder="e.g. 52012345" />
-                        <button className="btn btn-wine" type="button" onClick={lookupCgpa} disabled={cgpaLoading || !profileForm.student_id.trim()}>
-                          {cgpaLoading ? "..." : "Lookup"}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="col-md-6">
-                      <label className="form-label">Current Level / Year</label>
-                      <select className="form-select" value={profileForm.year} onChange={e => setProfileForm({...profileForm, year: e.target.value})}>
-                        <option value="" disabled>Select your level</option>
-                        <option value="Level 100">Level 100</option>
-                        <option value="Level 200">Level 200</option>
-                        <option value="Level 300">Level 300</option>
-                        <option value="Level 400">Level 400</option>
-                        <option value="Postgraduate">Postgraduate</option>
-                        <option value="Alumni">Alumni / Completed</option>
-                      </select>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-4">
-                    <button className="btn btn-wine px-4 py-2" type="submit" disabled={profileSubmitting}>
-                      {profileSubmitting ? "Saving..." : "Save Profile Details"}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ── REQUEST FORM ── */}
         {tab === "request" && (
           <div>
             {formSuccess ? (
               <div className="section-card">
                 <div style={{ textAlign: "center", padding: "3rem" }}>
-                  <div style={{ fontSize: 52, color: GREEN, marginBottom: 12 }}>✓</div>
-                  <h2 style={{ color: GREEN, marginBottom: 8 }}>Request Submitted!</h2>
-                  <p style={{ color: "#555", fontSize: 14 }}>Your request has been sent to the Academic Affairs Directorate.</p>
-                  <p style={{ color: "#555", fontSize: 14, marginTop: 6 }}>Total: <strong>GH₵{total}.00</strong> — Make payment at the Finance Office.</p>
+                  <div style={{ fontSize: 52, color: simulating ? GOLD : GREEN, marginBottom: 12 }}>{simulating ? "🧪" : "✓"}</div>
+                  <h2 style={{ color: simulating ? GOLD : GREEN, marginBottom: 8 }}>{simulating ? "Simulation Complete!" : "Request Submitted!"}</h2>
+                  {simulating && <span className="badge rounded-pill mb-2" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 12, padding: "4px 14px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪 This was a simulation</span>}
+                  <p style={{ color: "#555", fontSize: 14 }}>{simulating ? "A simulated request has been created. You can view it in My Requests and an admin can approve and upload a document." : "Your request has been sent to the Academic Affairs Directorate."}</p>
+                  <p style={{ color: "#555", fontSize: 14, marginTop: 6 }}>Total: <strong>GH₵{total}.00</strong> — {simulating ? "No real payment was charged." : "Make payment at the Finance Office."}</p>
                   {form.delivery_method && <p style={{ color: "#555", fontSize: 13, marginTop: 8 }}>
                     Delivery: <strong>{form.delivery_method === "pickup" ? `Pickup at ${form.pickup_location}` : form.delivery_method === "email" ? `Sent to ${form.delivery_email}` : form.delivery_method === "postal" ? `Posted to ${form.address}` : `Courier to ${form.address}`}</strong>
                   </p>}
@@ -541,7 +625,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                   <span className="section-card-title">
                     Step {step} — {requestSteps[step - 1]}
                   </span>
-                  <span className="badge rounded-pill" style={{ fontSize: 13, color: "#888", fontWeight: 500, background: "#f5f0eb", padding: "4px 12px" }}>Step {step} of 4</span>
+                  <span className="badge rounded-pill" style={{ fontSize: 13, color: "#888", fontWeight: 500, background: "#f5f0eb", padding: "4px 12px" }}>Step {step} of 5</span>
                 </div>
 
                 {/* Steps Progress Bar */}
@@ -556,7 +640,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                           <div style={{ ...s.progressCircle, ...(done ? s.progressCircleDone : active ? s.progressCircleActive : s.progressCircleInactive) }}>
                             {done ? "✓" : num}
                           </div>
-                          {num < 4 && <div style={{ ...s.progressLine, ...(done ? s.progressLineDone : {}) }} />}
+                          {num < 5 && <div style={{ ...s.progressLine, ...(done ? s.progressLineDone : {}) }} />}
                         </div>
                         <div style={{ ...s.progressLabel, ...(active ? s.progressLabelActive : {}) }}>{label}</div>
                       </div>
@@ -622,7 +706,7 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                   {/* Step 2 */}
                   {step === 2 && (
                     <div className="fade-in">
-                      <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="note" style={{ background: "linear-gradient(135deg, rgba(114,47,55,0.06) 0%, rgba(184,150,46,0.04) 100%)", border: "1px solid rgba(184,150,46,0.25)", borderRadius: 12, color: WINE, fontSize: 14 }}>Provide your accurate academic information. Note: Your Index Number and Level are pulled securely from your profile.</div>
+                      <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="note" style={{ background: "linear-gradient(135deg, rgba(114,47,55,0.06) 0%, rgba(184,150,46,0.04) 100%)", border: "1px solid rgba(184,150,46,0.25)", borderRadius: 12, color: WINE, fontSize: 14 }}>Provide your accurate academic information. Your Index Number is locked from your profile.</div>
                       <div className="name-row mb-3">
                         {[["first_name", "First name *"], ["middle_name", "Middle name"], ["surname", "Surname *"]].map(([name, label]) => (
                           <div key={name}>
@@ -638,8 +722,13 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                           <input className="form-input" style={{ backgroundColor: "#f0f0f0", color: "#666" }} value={student.student_id} disabled />
                         </div>
                         <div className="col-md-6">
-                          <label className="form-label">Level (Locked from Profile)</label>
-                          <input className="form-input" style={{ backgroundColor: "#f0f0f0", color: "#666" }} value={student.year} disabled />
+                          <label className="form-label">Campus *</label>
+                          <select className={"form-select" + (fieldErrors.level ? " input-error" : "")} name="level" value={form.level} onChange={handleChange}>
+                            <option value="">Select your campus</option>
+                            <option value="Winneba">Winneba</option>
+                            <option value="USTED">USTED</option>
+                          </select>
+                          {fieldErrors.level && <div className="field-error">{fieldErrors.level}</div>}
                         </div>
                         
                         <div className="col-md-6">
@@ -655,7 +744,6 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                         {[
                           { label: "Year of Entry", name: "year_entry", placeholder: "e.g. 2021" },
                           { label: "Year of Completion", name: "year_completion", placeholder: "e.g. 2025" },
-                          { label: "Passport Number (if applicable)", name: "passport_number" },
                         ].map(field => (
                           <div key={field.name} className="col-md-6">
                             <label className="form-label">{field.label}</label>
@@ -663,6 +751,13 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                             {fieldErrors[field.name] && <div className="field-error">{fieldErrors[field.name]}</div>}
                           </div>
                         ))}
+                        {form.letters.includes("Introductory letter (Visa)") && (
+                          <div className="col-md-6">
+                            <label className="form-label">Passport Number (if applicable)</label>
+                            <input className={"form-input" + (fieldErrors.passport_number ? " input-error" : "")} name="passport_number" value={form.passport_number} onChange={handleChange} placeholder="" />
+                            {fieldErrors.passport_number && <div className="field-error">{fieldErrors.passport_number}</div>}
+                          </div>
+                        )}
                         <div className="col-md-6">
                           <label className="form-label">Programme *</label>
                           <input className={"form-input" + (fieldErrors.programme ? " input-error" : "")} name="programme" value={form.programme} onChange={handleChange} placeholder="Select or type your programme" list="programme-list" />
@@ -725,6 +820,24 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                           <label className="form-label">Delivery Address *</label>
                           <input className={"form-input" + (fieldErrors.address ? " input-error" : "")} name="address" value={form.address} onChange={handleChange} placeholder="Full postal address" />
                           {fieldErrors.address && <div className="field-error">{fieldErrors.address}</div>}
+                          {form.delivery_method === "postal" && (
+                            <div className="mt-3">
+                              <label className="form-label">GPS Address</label>
+                              <input className="form-input" name="gps_address" value={form.gps_address} onChange={handleChange} placeholder="e.g. AK-039-5028" />
+                            </div>
+                          )}
+                          {form.delivery_method === "courier" && (
+                            <div className="mt-3">
+                              <label className="form-label">Delivery Zone *</label>
+                              <select className={"form-select" + (fieldErrors.courier_zone ? " input-error" : "")} name="courier_zone" value={form.courier_zone} onChange={handleChange}>
+                                <option value="">Select delivery zone</option>
+                                {COURIER_ZONES.map(z => (
+                                  <option key={z.key} value={z.key}>{z.label} — GH₵{z.price}.00</option>
+                                ))}
+                              </select>
+                              {fieldErrors.courier_zone && <div className="field-error">{fieldErrors.courier_zone}</div>}
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -753,53 +866,120 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                         {form.transcript_type && <div className="summary-row"><span>{form.transcript_type}</span><span>GH₵{transcriptPrice}.00</span></div>}
                         {form.extra_copy === "Yes" && <div className="summary-row"><span>Extra Copy</span><span>GH₵{extraCopyPrice}.00</span></div>}
                         {form.letters.map(l => { const opt = letterOptions.find(o => o.label === l); return <div key={l} className="summary-row"><span>{l}</span><span>GH₵{opt?.price || 0}.00</span></div>; })}
+                        {courierPrice > 0 && <div className="summary-row"><span>Courier Delivery ({COURIER_ZONES.find(z => z.key === form.courier_zone)?.label})</span><span>GH₵{courierPrice}.00</span></div>}
                         <div className="summary-total"><span>Total</span><span>GH₵{total}.00</span></div>
                         {form.delivery_method && <div className="summary-row pt-2 mt-2" style={{ borderTop: "1px solid #e8d5b0", fontSize: 12, color: "#888" }}>
                           <span>Delivery: {form.delivery_method === "pickup" ? "Campus Pickup" : form.delivery_method === "postal" ? "Postal" : form.delivery_method === "email" ? "Email" : "Courier"}</span>
-                          <span>{form.pickup_location || form.delivery_email || form.address || "—"}</span>
+                          <span>{form.pickup_location || form.delivery_email || form.address + (form.gps_address ? ` (${form.gps_address})` : "") || (form.courier_zone ? COURIER_ZONES.find(z => z.key === form.courier_zone)?.label : "") || "—"}</span>
                         </div>}
                       </div>
                     </div>
                   )}
 
-                  {/* Step 4 */}
+                  {/* Step 4 — Confirmation */}
                   {step === 4 && (
+                    <div className="fade-in">
+                      <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="status" style={{ background: "linear-gradient(135deg, rgba(45,80,22,0.06) 0%, rgba(45,80,22,0.02) 100%)", border: "1px solid rgba(45,80,22,0.25)", borderRadius: 12, color: "#2D5016", fontSize: 14 }}>Please review your details carefully before proceeding to payment.</div>
+
+                      <div className="rounded-4 p-4 mb-4" style={{ background: "#fff", border: "1px solid #e8d5b0", boxShadow: "0 8px 24px rgba(184,150,46,0.06)" }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: WINE, fontFamily: "var(--font-heading)", marginBottom: 16, borderBottom: "1px solid #e8d5b0", paddingBottom: 12 }}>Service &amp; Request</div>
+                        <div className="summary-row"><span>Transcript Type</span><span>{form.transcript_type || "Not selected"}</span></div>
+                        <div className="summary-row"><span>Extra Copy</span><span>{form.extra_copy}</span></div>
+                        {form.letters.length > 0 && <div className="summary-row"><span>Letters</span><span>{form.letters.join(", ")}</span></div>}
+
+                        <div style={{ fontSize: 16, fontWeight: 700, color: WINE, fontFamily: "var(--font-heading)", margin: "20px 0 12px", borderBottom: "1px solid #e8d5b0", paddingBottom: 12 }}>Academic Details</div>
+                        <div className="summary-row"><span>Full Name</span><span>{form.first_name} {form.middle_name} {form.surname}</span></div>
+                        <div className="summary-row"><span>Index Number</span><span>{student.student_id}</span></div>
+                        <div className="summary-row"><span>Campus</span><span>{form.level || "Not selected"}</span></div>
+                        {form.dob && <div className="summary-row"><span>Date of Birth</span><span>{form.dob}</span></div>}
+                        <div className="summary-row"><span>Programme</span><span>{form.programme}</span></div>
+                        {form.year_entry && <div className="summary-row"><span>Year of Entry</span><span>{form.year_entry}</span></div>}
+                        {form.year_completion && <div className="summary-row"><span>Year of Completion</span><span>{form.year_completion}</span></div>}
+
+                        <div style={{ fontSize: 16, fontWeight: 700, color: WINE, fontFamily: "var(--font-heading)", margin: "20px 0 12px", borderBottom: "1px solid #e8d5b0", paddingBottom: 12 }}>Delivery</div>
+                        <div className="summary-row"><span>Method</span><span>{form.delivery_method === "pickup" ? "Campus Pickup" : form.delivery_method === "postal" ? "Postal" : form.delivery_method === "email" ? "Email" : form.delivery_method === "courier" ? "Courier" : "Not selected"}</span></div>
+                        {form.pickup_location && <div className="summary-row"><span>Pickup Location</span><span>{form.pickup_location}</span></div>}
+                        {form.delivery_email && <div className="summary-row"><span>Delivery Email</span><span>{form.delivery_email}</span></div>}
+                        {form.address && <div className="summary-row"><span>Delivery Address</span><span>{form.address}</span></div>}
+                        {form.gps_address && <div className="summary-row"><span>GPS Address</span><span>{form.gps_address}</span></div>}
+                        {form.courier_zone && <div className="summary-row"><span>Delivery Zone</span><span>{COURIER_ZONES.find(z => z.key === form.courier_zone)?.label}</span></div>}
+                        <div className="summary-row"><span>Telephone</span><span>{form.country_code}{form.telephone}</span></div>
+
+                        {courierPrice > 0 && <div className="summary-row" style={{ fontSize: 13, color: "#555" }}><span>Courier Charge</span><span>GH₵{courierPrice}.00</span></div>}
+                        <div className="summary-total" style={{ marginTop: 24 }}><span>Total Amount</span><span>GH₵{total}.00</span></div>
+                      </div>
+
+                      <div className="d-flex justify-content-between align-items-center" style={{ borderTop: "1px solid rgba(224,208,176,0.6)", paddingTop: 24 }}>
+                        <button className="btn btn-wine-outline px-4 py-2" onClick={() => setStep(step - 1)}>← Back</button>
+                        <button className="btn btn-wine px-4 py-2" onClick={() => setStep(step + 1)}>Proceed to Payment →</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Step 5 — Payment */}
+                  {step === 5 && (
                     <div>
                       <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="note" style={{ background: "linear-gradient(135deg, rgba(114,47,55,0.06) 0%, rgba(184,150,46,0.04) 100%)", border: "1px solid rgba(184,150,46,0.25)", borderRadius: 12, color: WINE, fontSize: 14 }}>Complete your payment securely via Paystack.</div>
 
                       <div className="rounded-4 p-4 mb-4" style={{ background: "#fff", border: "1px solid #e8d5b0", boxShadow: "0 8px 24px rgba(184,150,46,0.06)" }}>
-                        <div className="d-flex align-items-center gap-3 mb-4">
-                          <span style={{ fontSize: 32 }}>🔒</span>
-                          <div>
-                            <div style={{ fontSize: 18, fontWeight: 800, color: WINE, fontFamily: "var(--font-heading)" }}>Paystack Secure Checkout</div>
-                            <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>Pay with Mobile Money or Debit/Credit Card</div>
-                          </div>
-                        </div>
-
-                        <div className="d-flex justify-content-between align-items-center p-4 rounded-3 mb-4" style={{ background: "linear-gradient(135deg, #722F37 0%, #4a1e24 100%)", boxShadow: "0 8px 24px rgba(114,47,55,0.4)" }}>
-                          <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 15, fontWeight: 500 }}>Total Due</span>
-                          <span style={{ color: GOLD, fontSize: 26, fontWeight: 800, fontFamily: "var(--font-heading)" }}>GH₵{total}.00</span>
-                        </div>
-
-                        <div className="row g-2 mb-4">
-                          {[{ icon: "📱", label: "MTN MoMo" }, { icon: "📱", label: "Vodafone Cash" }, { icon: "📱", label: "AirtelTigo Money" }, { icon: "💳", label: "Visa / Mastercard" }].map(p => (
-                            <div key={p.label} className="col-6">
-                              <div className="d-flex align-items-center gap-2 p-3 rounded-3" style={{ background: "#f9f6ef", border: "1px solid #e8d5b0", fontSize: 13, fontWeight: 500, color: "#444" }}>
-                                <span>{p.icon}</span> {p.label}
+                        {simulating ? (
+                          <>
+                            <div className="d-flex align-items-center gap-3 mb-4">
+                              <span style={{ fontSize: 32 }}>🧪</span>
+                              <div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: GOLD, fontFamily: "var(--font-heading)" }}>Simulated Payment</div>
+                                <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>No real payment will be charged — this is test mode</div>
                               </div>
                             </div>
-                          ))}
-                        </div>
+                            <div className="d-flex justify-content-between align-items-center p-4 rounded-3 mb-4" style={{ background: "linear-gradient(135deg, #854F0B 0%, #5A3508 100%)", boxShadow: "0 8px 24px rgba(133,79,11,0.4)" }}>
+                              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 15, fontWeight: 500 }}>Total Due (Simulated)</span>
+                              <span style={{ color: GOLD, fontSize: 26, fontWeight: 800, fontFamily: "var(--font-heading)" }}>GH₵{total}.00</span>
+                            </div>
+                            {formError && <div className="alert mb-0 py-3 px-4" role="alert" style={{ background: "#FCEBEB", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 8, fontWeight: 500 }}>{formError}</div>}
+                            <div className="d-flex justify-content-between align-items-center mt-4 pt-4" style={{ borderTop: "1px solid rgba(224,208,176,0.6)" }}>
+                              <button className="btn btn-wine-outline px-4 py-2" type="button" onClick={() => setStep(step - 1)}>← Back</button>
+                              <button className="btn btn-wine px-4 py-2" style={{ background: GOLD, borderColor: GOLD }} disabled={submitting} onClick={handleSimulatePayment}>
+                                {submitting ? "Processing..." : `🧪 Simulate Payment — GH₵${total}.00`}
+                              </button>
+                            </div>
+                            <div style={{ fontSize: 13, color: "#666", marginTop: 12, fontStyle: "italic" }}>This is a simulation. No real payment will be processed.</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="d-flex align-items-center gap-3 mb-4">
+                              <span style={{ fontSize: 32 }}>🔒</span>
+                              <div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: WINE, fontFamily: "var(--font-heading)" }}>Paystack Secure Checkout</div>
+                                <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>Pay with Mobile Money or Debit/Credit Card</div>
+                              </div>
+                            </div>
 
-                        {formError && <div className="alert mb-0 py-3 px-4" role="alert" style={{ background: "#FCEBEB", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 8, fontWeight: 500 }}>{formError}</div>}
+                            <div className="d-flex justify-content-between align-items-center p-4 rounded-3 mb-4" style={{ background: "linear-gradient(135deg, #722F37 0%, #4a1e24 100%)", boxShadow: "0 8px 24px rgba(114,47,55,0.4)" }}>
+                              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 15, fontWeight: 500 }}>Total Due</span>
+                              <span style={{ color: GOLD, fontSize: 26, fontWeight: 800, fontFamily: "var(--font-heading)" }}>GH₵{total}.00</span>
+                            </div>
 
-                        <div className="d-flex justify-content-between align-items-center mt-4 pt-4" style={{ borderTop: "1px solid rgba(224,208,176,0.6)" }}>
-                          <button className="btn btn-wine-outline px-4 py-2" type="button" onClick={() => setStep(step - 1)}>← Back</button>
-                          <button className="btn btn-wine px-4 py-2" disabled={submitting} onClick={handlePaystackPayment}>
-                            {submitting ? "Processing..." : `Pay GH₵${total}.00 Now`}
-                          </button>
-                        </div>
-                        <div style={{ fontSize: 13, color: "#666", marginTop: 12, fontStyle: "italic" }}>You will be redirected to Paystack's secure checkout to complete your payment.</div>
+                            <div className="row g-2 mb-4">
+                              {[{ icon: "📱", label: "MTN MoMo" }, { icon: "📱", label: "Vodafone Cash" }, { icon: "📱", label: "AirtelTigo Money" }, { icon: "💳", label: "Visa / Mastercard" }].map(p => (
+                                <div key={p.label} className="col-6">
+                                  <div className="d-flex align-items-center gap-2 p-3 rounded-3" style={{ background: "#f9f6ef", border: "1px solid #e8d5b0", fontSize: 13, fontWeight: 500, color: "#444" }}>
+                                    <span>{p.icon}</span> {p.label}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {formError && <div className="alert mb-0 py-3 px-4" role="alert" style={{ background: "#FCEBEB", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 8, fontWeight: 500 }}>{formError}</div>}
+
+                            <div className="d-flex justify-content-between align-items-center mt-4 pt-4" style={{ borderTop: "1px solid rgba(224,208,176,0.6)" }}>
+                              <button className="btn btn-wine-outline px-4 py-2" type="button" onClick={() => setStep(step - 1)}>← Back</button>
+                              <button className="btn btn-wine px-4 py-2" disabled={submitting} onClick={handlePaystackPayment}>
+                                {submitting ? "Processing..." : `Pay GH₵${total}.00 Now`}
+                              </button>
+                            </div>
+                            <div style={{ fontSize: 13, color: "#666", marginTop: 12, fontStyle: "italic" }}>You will be redirected to Paystack's secure checkout to complete your payment.</div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -838,8 +1018,14 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
                       </div>
                       <div className="d-flex align-items-center gap-3">
                         <span className="badge rounded-pill" style={badge(r.status)}>{r.status}</span>
+                        {(r.notes || "").includes("[SIMULATION]") && <span className="badge rounded-pill" style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 10, padding: "4px 8px", fontWeight: 600, border: "1px solid #FAC775" }}>🧪 Sim</span>}
                         {r.status === "Approved" && (
-                          <button className="btn btn-green btn-sm" onClick={() => generatePDF(student, student.semesters || [], r.id)}>Download PDF</button>
+                          <>
+                            {r.document && (
+                              <a className="btn btn-green btn-sm" href={r.document} target="_blank" rel="noopener noreferrer">Download Document</a>
+                            )}
+                            <button className="btn btn-outline-secondary btn-sm" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => generatePDF(student, student.semesters || [], r.id)}>PDF (auto)</button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -850,6 +1036,123 @@ export default function StudentDashboard({ onLogout }: { onLogout: () => void })
           </div>
         )}
       </div>
+
+      {/* ── Profile Modal ── */}
+      {showProfileModal && (
+        <div style={s.modalOverlay} onClick={() => setShowProfileModal(false)}>
+          <div style={s.modalContent} onClick={e => e.stopPropagation()}>
+            <div style={s.modalHeader}>
+              <span style={s.modalTitle}>My Profile</span>
+              <button style={s.modalClose} onClick={() => setShowProfileModal(false)}>✕</button>
+            </div>
+            <div style={s.modalBody}>
+              <div className="alert d-flex align-items-center gap-2 py-3 px-4 mb-4" role="note" style={{ background: "linear-gradient(135deg, rgba(114,47,55,0.06) 0%, rgba(184,150,46,0.04) 100%)", border: "1px solid rgba(184,150,46,0.25)", borderRadius: 12, color: WINE, fontSize: 14 }}>Please update your academic credentials. Your Index Number is required to process requests.</div>
+
+              {profileMessage && (
+                <div className={"alert d-flex align-items-center py-3 px-4 mb-4 " + (profileMessage.includes("success") ? "text-green" : "text-danger")} role="alert" style={{ background: profileMessage.includes("success") ? "rgba(45,80,22,0.08)" : "#FCEBEB", border: profileMessage.includes("success") ? "1px solid rgba(99,153,34,0.3)" : "1px solid #F7C1C1", borderRadius: 8, fontWeight: 500 }}>{profileMessage}</div>
+              )}
+
+              {/* CGPA Lookup */}
+              <div className="d-flex align-items-center gap-3 mb-4" style={{ background: "linear-gradient(135deg, rgba(45,80,22,0.06) 0%, rgba(45,80,22,0.02) 100%)", border: "1px solid rgba(45,80,22,0.2)", borderRadius: 12, padding: "1.25rem 1.5rem", display: cgpaData ? "flex" : "none", boxShadow: "0 4px 16px rgba(45,80,22,0.06)" }}>
+                <span style={{ fontSize: 28 }}>🎓</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a", marginBottom: 2 }}>{cgpaData?.name}</div>
+                  <div style={{ fontSize: 13, color: "#888" }}>{cgpaData?.year} &middot; {cgpaData?.status}</div>
+                </div>
+                <div style={{ textAlign: "center", padding: "8px 20px", background: "linear-gradient(135deg, #2D5016 0%, #1a3a0e 100%)", borderRadius: 10, boxShadow: "0 4px 12px rgba(45,80,22,0.2)" }}>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>CGPA</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", fontFamily: "var(--font-heading)" }}>{cgpaData?.gpa}</div>
+                </div>
+              </div>
+
+              <form onSubmit={handleProfileUpdate}>
+                <div className="row g-3">
+                  <div className="col-md-6">
+                    <label className="form-label">Index Number / Student ID</label>
+                    <div className="input-group">
+                      <input className="form-input flex-grow-1" value={profileForm.student_id} onChange={e => { setCgpaData(null); setProfileForm({...profileForm, student_id: e.target.value.replace(/[^0-9a-zA-Z]/g, "")}); }} placeholder="e.g. 52012345" />
+                      <button className="btn btn-wine" type="button" onClick={lookupCgpa} disabled={cgpaLoading || !profileForm.student_id.trim()}>
+                        {cgpaLoading ? "..." : "Lookup"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">Current Level / Year</label>
+                    <select className="form-select" value={profileForm.year} onChange={e => setProfileForm({...profileForm, year: e.target.value})}>
+                      <option value="" disabled>Select your level</option>
+                      <option value="Level 100">Level 100</option>
+                      <option value="Level 200">Level 200</option>
+                      <option value="Level 300">Level 300</option>
+                      <option value="Level 400">Level 400</option>
+                      <option value="Postgraduate">Postgraduate</option>
+                      <option value="Alumni">Alumni / Completed</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <button className="btn btn-wine px-4 py-2" type="submit" disabled={profileSubmitting}>
+                    {profileSubmitting ? "Saving..." : "Save Profile Details"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Help / Support Modal ── */}
+      {showSupport && (
+        <div style={s.modalOverlay} onClick={() => setShowSupport(false)}>
+          <div style={s.modalContent} onClick={e => e.stopPropagation()}>
+            <div style={s.modalHeader}>
+              <span style={s.modalTitle}>❓ Help &amp; Support</span>
+              <button style={s.modalClose} onClick={() => setShowSupport(false)}>✕</button>
+            </div>
+            <div style={s.modalBody}>
+              {/* Submit Ticket Form */}
+              <h6 style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, color: WINE }}>Submit a Complaint / Ticket</h6>
+              <form onSubmit={handleSubmitTicket}>
+                <div className="mb-3">
+                  <input className="form-input w-100" placeholder="Subject" value={ticketSubject} onChange={e => setTicketSubject(e.target.value)} required style={{ fontSize: 14 }} />
+                </div>
+                <div className="mb-3">
+                  <textarea className="form-input w-100" rows={3} placeholder="Describe your issue..." value={ticketMessage} onChange={e => setTicketMessage(e.target.value)} required style={{ fontSize: 14, resize: "vertical" }} />
+                </div>
+                {ticketSuccess && <div className="mb-3" style={s.success}>{ticketSuccess}</div>}
+                {ticketError && <div className="mb-3" style={s.error}>{ticketError}</div>}
+                <button className="btn btn-wine" type="submit" disabled={ticketSubmitting}>
+                  {ticketSubmitting ? "Submitting..." : "Submit Ticket"}
+                </button>
+              </form>
+
+              <hr style={{ margin: "1.5rem 0", borderColor: "#e8d5b0" }} />
+
+              {/* Ticket History */}
+              <h6 style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, color: WINE }}>My Tickets</h6>
+              {tickets.length === 0 ? (
+                <p style={{ fontSize: 13, color: "#999" }}>No tickets yet.</p>
+              ) : (
+                tickets.map(t => (
+                  <div key={t.id} style={{ border: "1px solid #e8d5b0", borderRadius: 10, padding: 14, marginBottom: 12, background: "#faf8f4" }}>
+                    <div className="d-flex align-items-center justify-content-between mb-2">
+                      <strong style={{ fontSize: 14 }}>{t.subject}</strong>
+                      <span className="badge rounded-pill" style={{ background: t.status === "Open" ? "#FAEEDA" : t.status === "In Progress" ? "#E3EEF9" : t.status === "Resolved" ? "#EAF3DE" : "#EAEAEA", color: t.status === "Open" ? "#854F0B" : t.status === "In Progress" ? "#185FA5" : t.status === "Resolved" ? "#3B6D11" : "#666", fontSize: 11, padding: "3px 10px", fontWeight: 600 }}>{t.status}</span>
+                    </div>
+                    <p style={{ fontSize: 13, color: "#666", margin: 0 }}>{t.message}</p>
+                    {t.admin_response && (
+                      <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(45,80,22,0.06)", borderLeft: "3px solid #3B6D11", borderRadius: 6, fontSize: 13, color: "#333" }}>
+                        <strong style={{ color: "#3B6D11" }}>Admin:</strong> {t.admin_response}
+                        <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>{t.responded_by} &middot; {t.responded_at ? new Date(t.responded_at).toLocaleDateString() : ""}</div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -894,7 +1197,7 @@ const s = {
   progressLabelActive: { color: WINE, fontWeight: 700 },
 
   sidebarFooter: { padding: "0.75rem", borderTop: `1px solid ${WINE}22`, marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 },
-  sidebarProfileCard: { background: `linear-gradient(135deg, ${WINE}15, ${WINE}08)`, border: `1px solid ${WINE}25`, borderRadius: 12, padding: "12px", display: "flex", flexDirection: "column", gap: 10 },
+  sidebarProfileCard: { background: `linear-gradient(135deg, ${WINE}15, ${WINE}08)`, border: `1px solid ${WINE}25`, borderRadius: 12, padding: "12px", display: "flex", flexDirection: "column", gap: 10, cursor: "pointer", transition: "all 0.2s ease" },
   sidebarProfileTop: { display: "flex", alignItems: "center", gap: 10 },
   studentAvatar: { width: 44, height: 44, borderRadius: 12, background: `linear-gradient(135deg, ${WINE}, #8A1A2F 100%)`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, flexShrink: 0, boxShadow: `0 4px 12px ${WINE}55` },
   studentInfo: { flex: 1, overflow: "hidden" },
@@ -1006,6 +1309,13 @@ const s = {
   requestDate: { fontSize: 13, color: "#aaa" },
   requestCardRight: { display: "flex", alignItems: "center", gap: 16 },
   downloadBtn: { padding: "8px 20px", background: `linear-gradient(90deg, ${GREEN} 0%, #1a3a0e 100%)`, color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(45,80,22,0.3)", transition: "all 0.2s ease" },
-  profileBtn: { padding: "12px 24px", background: `linear-gradient(90deg, #8A3A44 0%, ${WINE} 100%)`, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", transition: "all 0.2s ease", boxShadow: "0 4px 12px rgba(114,47,55,0.2)" },
   success: { background: "rgba(45,80,22,0.1)", border: "1px solid rgba(99,153,34,0.3)", color: "#2D5016", fontSize: 14, padding: "12px 16px", borderRadius: 8, fontWeight: 500 },
+
+  /* ── Profile Modal ── */
+  modalOverlay: { position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" },
+  modalContent: { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 600, maxHeight: "90vh", overflow: "auto", boxShadow: "0 32px 64px rgba(0,0,0,0.3)" },
+  modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 1.5rem", borderBottom: "1px solid #e8d5b0", background: "linear-gradient(135deg, #722F37 0%, #4a1e24 100%)" },
+  modalTitle: { fontSize: 18, fontWeight: 700, color: "#fff", fontFamily: "var(--font-heading)" },
+  modalClose: { background: "none", border: "none", color: "rgba(255,255,255,0.6)", fontSize: 22, cursor: "pointer", lineHeight: 1, padding: "4px 8px" },
+  modalBody: { padding: "1.5rem" },
 } as const;
